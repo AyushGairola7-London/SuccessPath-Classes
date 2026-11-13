@@ -1,5 +1,5 @@
-// Puts entries from a Google Drive backup file back into the database.
-// It only ADDS entries that are missing. It never changes or removes anything already there,
+// Puts entries, students, teachers and tasks from a Google Drive backup file back into the database.
+// It only ADDS what is missing. It never changes or removes anything already there,
 // so it is safe to run more than once.
 //
 //   npm run restore -- "SuccessPath database 2026-11-13 0200.json"            (makes restore.sql)
@@ -32,8 +32,12 @@ if (!backup || !Array.isArray(backup.entries)) {
   process.exit(1);
 }
 
-const COLUMNS = ['id', 'type', 'seq', 'code', 'status', 'entry_date', 'name', 'phone', 'amount', 'data',
-  'client_id', 'created_at', 'updated_at', 'cancelled_at', 'cancel_reason'];
+const PEOPLE_COLUMNS = ['id', 'kind', 'seq', 'code', 'name', 'name_key', 'class', 'phone', 'status', 'details',
+  'joined_on', 'left_on', 'created_from', 'created_at', 'updated_at'];
+const ENTRY_COLUMNS = ['id', 'type', 'seq', 'code', 'status', 'entry_date', 'name', 'phone', 'amount', 'data',
+  'client_id', 'person_id', 'created_at', 'updated_at', 'cancelled_at', 'cancel_reason'];
+const TASK_COLUMNS = ['id', 'seq', 'code', 'title', 'notes', 'stage', 'due_on', 'owner', 'position', 'client_id',
+  'created_at', 'updated_at', 'done_at'];
 
 function sql(value) {
   if (value === null || value === undefined) return 'NULL';
@@ -42,16 +46,25 @@ function sql(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-const lines = backup.entries.map((entry) => {
-  const values = COLUMNS.map((c) => sql(c === 'data' ? entry.data || {} : entry[c]));
-  return `INSERT OR IGNORE INTO entries (${COLUMNS.join(', ')}) VALUES (${values.join(', ')});`;
-});
+const people = Array.isArray(backup.people) ? backup.people : [];
+const tasks = Array.isArray(backup.tasks) ? backup.tasks : [];
+const lines = [
+  ...people.map((p) => {
+    const row = { ...p, details: p.details || {}, name_key: p.name_key || String(p.name || '').replace(/\s+/g, ' ').trim().toLowerCase() };
+    return `INSERT OR IGNORE INTO people (${PEOPLE_COLUMNS.join(', ')}) VALUES (${PEOPLE_COLUMNS.map((c) => sql(row[c])).join(', ')});`;
+  }),
+  ...backup.entries.map((entry) => {
+    const row = { ...entry, data: entry.data || {} };
+    return `INSERT OR IGNORE INTO entries (${ENTRY_COLUMNS.join(', ')}) VALUES (${ENTRY_COLUMNS.map((c) => sql(row[c])).join(', ')});`;
+  }),
+  ...tasks.map((task) => `INSERT OR IGNORE INTO tasks (${TASK_COLUMNS.join(', ')}) VALUES (${TASK_COLUMNS.map((c) => sql(task[c])).join(', ')});`),
+];
 writeFileSync('restore.sql', `${lines.join('\n')}\n`);
-console.log(`Wrote restore.sql with ${lines.length} entries from ${file}.`);
+console.log(`Wrote restore.sql with ${people.length} students and teachers, ${backup.entries.length} entries and ${tasks.length} tasks, from ${file}.`);
 
 const command = ['wrangler', 'd1', 'execute', 'successpath-db', local ? '--local' : '--remote', '--file', 'restore.sql'];
 if (!run) {
-  console.log('\nTo put the missing entries back, run:');
+  console.log('\nTo put the missing ones back, run:');
   console.log(`  npx ${command.join(' ')}`);
   process.exit(0);
 }

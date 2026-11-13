@@ -1,8 +1,116 @@
-# SuccessPath Classes: data entry app (version 1)
+# SuccessPath Classes: data entry app (version 2.2)
 
-A web page your dad opens on his phone or laptop to record enquiries, admissions, fees, complaints
-and teachers joining or leaving. Every entry goes into a database, is copied into a Google Sheet
-within 5 minutes, and is backed up to Google Drive every night. It runs on free plans.
+A web page your dad opens on his phone or laptop to record enquiries, admissions, fees, marks,
+exam dates, complaints, teacher and other payments, and teachers joining or leaving, with a Tasks
+board for what to do next. Every entry goes into a database, is copied into a Google Sheet within
+5 minutes, and is backed up to Google Drive every night. It runs on free plans.
+
+## New in version 2.2
+
+- **Nothing is mandatory.** Every form saves with whatever is filled in. Only a completely empty
+  form is refused, and a cancellation no longer needs a reason.
+- **Other payment** form (under *Payments made*): rent, electricity, stationery, advertising and
+  anything else that is not a teacher's pay. It has its own **Other Payments** tab, and the
+  Analytics page shows money in and out with three series: fees, teachers and other payments.
+- **Exam dates** form: the dates of a school exam (half-yearly, annual, unit test and so on) for one
+  student, or for a whole class by leaving the student empty and choosing the class and school.
+  A student's page lists their own exam dates and the ones saved for their class (same class, and
+  the same school or no school given), with an **Exam dates** button.
+- **Add marks** now has an **Exam** choice, so half-yearly results are labelled.
+- **Tasks board** (the new **Tasks** tab at the bottom): write what needs doing next, such as
+  "Hire a maths teacher" or "Market the crash course", with an optional due date, who is doing it,
+  and notes. Tasks move from **To do** to **Doing** to **Done** with one tap (Start, Mark done), and
+  a done task gets a Done stamp. Tap a task to edit it, move it back, or remove it from the board.
+  On a laptop the three columns sit side by side and cards can be dragged between them. Late tasks
+  are marked in red. Above the board, **Exams in the next 45 days** lists the coming exam dates.
+- Tasks are never deleted: "Remove from board" only hides them. The Google Sheet has a **Tasks** tab
+  with every task, removed ones included, and they are in the nightly backup.
+- The nightly email has a **Coming up this week** list: late tasks, tasks due in the next 7 days, and
+  exams starting in the next 7 days.
+
+### Moving your live app to version 2.2 (about 5 minutes)
+
+In this folder, in the terminal:
+
+```
+npm run db:setup
+npm run deploy
+```
+
+The first command adds the Tasks table to the database (type `y` when it asks). Run it **before**
+`npm run deploy`. Then, in the Google Sheet: **Extensions > Apps Script**, select everything in
+`Code.gs`, paste the new `google-sheet/Code.gs` over it, and click **Save**. The new tabs (Exam Dates,
+Other Payments, Tasks) appear within 5 minutes, or straight away with **SuccessPath > Rebuild all tabs
+from the database**. No new permissions are needed.
+
+## New in version 2
+
+- **One record per student and per teacher.** When a fee is saved, the app checks whether the
+  student is already in the register. If not, it adds them (STU-0001, STU-0002, …); if they are,
+  the fee goes onto their record. Admissions, "Student left", marks and notes go onto the same
+  record, so nobody is stored twice. Teachers work the same way (TR-0001, …) with their payments.
+- **Name suggestions.** As you type a name on a form, the app suggests people already in the
+  register. Tap one to save onto that record.
+- **Students and Teachers pages:** search and filter the list, then open anyone to see their
+  details, fee or payment history, marks and notes, with buttons to add a fee, marks or a note.
+- **Analytics page:** fees collected and paid out per month, who has not paid this month (with a
+  call button), students by class, where enquiries come from and how many joined, marks that
+  dropped, why students left, and complaints.
+- **Teacher payment** form, **Add marks** form, and notes on any student or teacher.
+- **Google Sheet:** new **Students** and **Teachers** tabs (one row per person with their totals),
+  and a Student ID or Teacher ID column on the entry tabs. The tab that listed admissions is now
+  called **Admissions**, and the one for new teachers is **Teachers Joined**.
+- **Nightly email** to gairolaayush99@gmail.com with the day's new entries, cancellations and the
+  month's totals so far. (Change `EMAIL_TO` at the top of `google-sheet/Code.gs`.)
+
+### Moving your live app to version 2 (about 5 minutes)
+
+In this folder, in the terminal:
+
+```
+npm run db:setup
+npm run deploy
+```
+
+The first command adds the student and teacher registers to the database and builds them from the
+entries you have already saved. Type `y` when it asks. Run it **before** `npm run deploy`.
+
+Then update the Google Sheet:
+
+1. **Extensions > Apps Script**, select everything in `Code.gs`, paste the new
+   `google-sheet/Code.gs` over it, and click **Save**.
+2. Back in the sheet, reload the page, then click **SuccessPath > Email today's entries now**.
+   Google asks for permission again, because the script now sends email: allow it the same way as
+   before (Advanced > Go to … > Allow), then click the menu item once more. The email should arrive
+   within a minute, and the scheduled runs (sync, backup and email) keep working from then on.
+3. The tabs rebuild themselves within 5 minutes. To do it straight away: **SuccessPath > Rebuild all
+   tabs from the database**.
+
+### Adding the records you already have
+
+`Existing data template.xlsx` (in the SuccessPath Application folder, outside this code folder so
+student details never go to GitHub) has a tab each for students, fees paid, teachers, teacher
+payments and marks. Fill in what you have; only names matter, everything else is optional. Every
+row is checked first and you see a summary before anything is added. The rows are then saved
+through the app like normal entries, so students are matched by the rules below and nobody is
+added twice, and running the same file again adds nothing new.
+
+### How the app decides it is the same student
+
+- A student **picked from the suggestions** is always used.
+- A **typed** name matches someone already in the register with the same name (capital letters and
+  extra spaces are ignored) **and** the same class or the same phone number. Otherwise a new record
+  is made. So two different Rahul Sharmas in different classes stay separate, and a student who moved
+  up a class is still found by their phone number.
+- If a fee is cancelled and it was the only thing that added a mistyped name, that name is hidden from
+  the register again. If the same entry is entered again correctly, it goes back onto the same record.
+
+### The Students and Analytics pages are open, as you chose
+
+Anyone with the app link can see the student list, fees, marks and analytics. The page is hidden from
+search engines, but please keep the link private until you add a login. Two easy ways to add one later:
+Cloudflare Access (no code change, see "About having no login" below), or a password check in one place,
+`checkViewer()` in `src/worker.js`, which every viewing page already goes through.
 
 ```
  Dad's phone or laptop                 (keeps entries if the internet drops, sends them later)
@@ -121,7 +229,8 @@ your password manager; you need it again in step 7.
 5. Click **SuccessPath > Connect to the app** again. Paste the app link from step 5, then the sync key
    from step 6.
 
-The tabs (Fees, Enquiries, Students, Students Left, Teachers, Teachers Left, Complaints) and an
+A tab for each form (Fees, Enquiries, Admissions, Marks, Students Left, Teacher Payments,
+Teachers Joined, Teachers Left, Complaints, Notes), the **Students** and **Teachers** registers, and an
 **About** tab appear. From now on the script runs by itself.
 
 ### 8. Test it
@@ -162,7 +271,10 @@ If he wants to see the records too, share the Google Sheet with him as a **Viewe
 
 - Tap a button, fill in the form, press **Save**. The stamp shows the entry number, for example
   **FEE-0012**. For fees, that can go on the paper receipt.
-- Fields with a red * must be filled in. Anything else can be left empty.
+- Nothing is mandatory: fill in what you know and leave the rest empty. Only a completely empty
+  form is refused. (To make a field mandatory, add `required: true` to it in `public/forms.js`.)
+- **Tasks:** type the next job in *Add a task* and press **Add**. **Start** moves it to Doing,
+  **Mark done** stamps it Done, and **Undo** at the bottom puts it back if tapped by mistake.
 - If he leaves a form half-filled (a phone call, say), it is still there when he comes back.
 - **No internet?** The entry is kept on the phone and the top of the screen says "1 waiting". It is
   sent by itself when the internet is back.
@@ -248,14 +360,15 @@ used from the next run; nothing else to do. Settings such as how often it checks
 
 ## About having no login
 
-- The page can only **add** entries. It never shows stored data, so nobody can read your records
-  through the link. Reading needs the Google Sheet (your Google login) or Cloudflare (your login).
-- Anyone who has the link could add entries. The page is hidden from Google search; just keep the
-  link in the family. A spam trap on the page stops robots.
+- Since version 2, the Students, Teachers and Analytics pages **show** stored data to anyone who has
+  the link. Keep the link in the family until you add a login.
+- Anyone who has the link could also add entries. The page is hidden from Google search, and a spam
+  trap on the page stops robots.
 - When you want a login (for staff, say), Cloudflare Access can be switched on without code changes:
   Cloudflare dashboard > Workers & Pages > successpath > Settings > Domains & Routes >
   **Enable Cloudflare Access**. Cloudflare's Zero Trust free plan covers small teams. Add a bypass
-  for `/api/sync` and `/api/export`, which the Google Sheet uses with its own key.
+  for `/api/sync`, `/api/export`, `/api/registers` and `/api/tasks-export`, which the Google Sheet
+  uses with its own key.
 
 ---
 
@@ -264,11 +377,16 @@ used from the next run; nothing else to do. Settings such as how often it checks
 ```
 public/                 the web page your dad uses
   forms.js              all the forms and their fields: edit this to change what is asked
-  app.js                how the page works (saving, offline queue, cancelling)
+  app.js                picks the screen to show
+  entry.js              home screen, forms, name suggestions, saving, offline queue, cancelling
+  people.js             Students and Teachers screens
+  tasks.js              Tasks board and the exams coming up
+  analytics.js          Analytics screen
+  lib.js                small helpers shared by the screens
   styles.css            how the page looks
   index.html, sw.js, manifest.webmanifest, icons/   app shell, offline support, home-screen icon
 src/worker.js           the server: checks and saves entries, gives the sheet its feed
-migrations/             the database tables, delete protection and history
+migrations/             the database tables, delete protection, history, registers, Tasks board
 google-sheet/Code.gs    the script you paste into the Google Sheet
 scripts/                helpers: make-key, backup, restore, check-forms
 test/                   tests, and the local test server behind `npm run try`
@@ -292,9 +410,9 @@ Server logs: Cloudflare dashboard > Workers & Pages > successpath > **Logs**.
 
 ---
 
-## Ideas for version 2
+## Ideas for the next version
 
-WhatsApp receipts, a login for staff, a student list with fees due, editing entries, and simple
-reports (fees per month, enquiries that became admissions). The structure is ready for these:
-the history table already records every change, and `forms.js` drives the page, the checks and the
-sheet together.
+WhatsApp receipts and fee reminders (the Analytics page already lists who has not paid), a login for
+staff, entering a whole class's test marks at once, and editing a student's details from their page.
+The structure is ready for these: the history tables record every change, and `forms.js` drives the
+page, the checks and the sheet together.

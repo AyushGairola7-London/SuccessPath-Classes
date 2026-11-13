@@ -2,10 +2,15 @@
 // Always tries the internet first, so updates you deploy show up straight away.
 // Entries are never stored here; the page keeps unsent entries itself.
 
-const CACHE = 'successpath-v1';
+const CACHE = 'successpath-v2-2';
 const SHELL = [
   '/',
   '/app.js',
+  '/lib.js',
+  '/entry.js',
+  '/people.js',
+  '/tasks.js',
+  '/analytics.js',
   '/forms.js',
   '/styles.css',
   '/manifest.webmanifest',

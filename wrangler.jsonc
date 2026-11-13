@@ -1,26 +1,26 @@
 // Cloudflare settings for the SuccessPath app.
 // Reference: https://developers.cloudflare.com/workers/wrangler/configuration/
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-
-  // Part of the web address: https://successpath.<your-subdomain>.workers.dev
-  "name": "successpath",
-  "main": "src/worker.js",
-  "compatibility_date": "2026-06-01",
-
-  // The web page (everything in /public). Cloudflare serves these files for free.
-  "assets": { "directory": "./public" },
-
-  // The database. Paste the database_id printed by `npx wrangler d1 create successpath-db`.
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "successpath-db",
-      "database_id": "PASTE-YOUR-DATABASE-ID-HERE",
-      "migrations_dir": "migrations"
-    }
-  ],
-
-  // Keeps 3 days of server logs: Cloudflare dashboard > Workers & Pages > successpath > Logs.
-  "observability": { "enabled": true }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// Part of the web address: https://successpath.<your-subdomain>.workers.dev
+	"name": "successpath",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-06-01",
+	// The web page (everything in /public). Cloudflare serves these files for free.
+	"assets": {
+		"directory": "./public"
+	},
+	// The database. Paste the database_id printed by `npx wrangler d1 create successpath-db`.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "successpath-db",
+			"database_id": "b987f472-2f2c-451d-889e-95e4ae5da3b5",
+			"migrations_dir": "migrations"
+		}
+	],
+	// Keeps 3 days of server logs: Cloudflare dashboard > Workers & Pages > successpath > Logs.
+	"observability": {
+		"enabled": true
+	}
 }

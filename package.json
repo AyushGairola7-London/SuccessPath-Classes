@@ -1,6 +1,6 @@
 {
   "name": "successpath-app",
-  "version": "1.0.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "description": "SuccessPath Classes data entry app: Cloudflare Workers + D1 database + Google Sheet",
