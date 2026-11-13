@@ -1,0 +1,2 @@
+# Settings for `npm run dev` on your own computer only. Copy this file to .dev.vars
+SYNC_KEY=local-dev-sync-key-change-me-12345

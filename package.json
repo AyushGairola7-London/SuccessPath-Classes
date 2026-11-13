@@ -1,0 +1,26 @@
+{
+  "name": "successpath-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SuccessPath Classes data entry app: Cloudflare Workers + D1 database + Google Sheet",
+  "scripts": {
+    "check": "node scripts/check-forms.mjs",
+    "predeploy": "node scripts/check-forms.mjs",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "db:setup": "wrangler d1 migrations apply successpath-db --remote",
+    "db:setup:local": "wrangler d1 migrations apply successpath-db --local",
+    "make-key": "node scripts/make-key.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore-from-backup.mjs",
+    "try": "node test/local-server.mjs",
+    "test": "node --test test/api.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.124.0"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
