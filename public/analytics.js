@@ -43,8 +43,14 @@ function draw(a, note) {
   const before = a.fees[a.fees.length - 2];
   const last = a.fees.length - 1;
   const other = a.other_payments || a.fees.map(() => ({ amount: 0 }));
-  const paidOut = (i) => a.teacher_payments[i].amount + other[i].amount;
+  // Money returned to students who left is money paid out, like teachers' pay.
+  const returned = a.refunds || a.fees.map(() => ({ amount: 0 }));
+  const anyReturned = returned.some((r) => r.amount > 0);
+  const paidOut = (i) => a.teacher_payments[i].amount + other[i].amount + returned[i].amount;
   const mon = a.month_label.split(' ')[0];
+  const refundNow = returned[last].amount;
+  const names = ['Fees collected', 'Paid to teachers', 'Other payments', ...(anyReturned ? ['Money returned'] : [])];
+  const valuesAt = (i) => [a.fees[i].amount, a.teacher_payments[i].amount, other[i].amount, ...(anyReturned ? [returned[i].amount] : [])];
   const prev = a.prev_month_label.split(' ')[0];
   const convPct = a.conversion.enquiries ? Math.round((100 * a.conversion.joined) / a.conversion.enquiries) : 0;
 
@@ -53,23 +59,20 @@ function draw(a, note) {
 
     <section class="kpis" aria-label="This month">
       ${statTile(`Fees collected in ${mon}`, money(now.amount), `${prev}: ${money(before.amount)}`)}
-      ${statTile(`Paid out in ${mon}`, money(paidOut(last)), `Teachers ${money(a.teacher_payments[last].amount)}, other ${money(other[last].amount)}`)}
+      ${statTile(`Paid out in ${mon}`, money(paidOut(last)), `Teachers ${money(a.teacher_payments[last].amount)}, other ${money(other[last].amount)}${refundNow ? `, returned ${money(refundNow)}` : ''}`)}
       ${statTile('Active students', String(a.students.active), `${a.this_month.admissions} joined, ${a.this_month.left} left in ${mon}`)}
       ${statTile(`Enquiries in ${mon}`, String(a.this_month.enquiries), `${prev}: ${a.last_month.enquiries}`)}
     </section>
 
     <section class="card" aria-labelledby="c-money">
       <h2 class="card-title" id="c-money">Money in and out</h2>
-      <p class="card-sub">Fees collected, paid to teachers and other payments, last 6 months</p>
+      <p class="card-sub">Fees collected, and money paid out to teachers, for other payments${anyReturned ? ' and returned to students' : ''}, ${esc(a.fees[0].label)} to ${esc(a.fees[last].label)}</p>
       <div class="legend">
-        <span class="legend-item"><span class="key key--1"></span>Fees collected</span>
-        <span class="legend-item"><span class="key key--2"></span>Paid to teachers</span>
-        <span class="legend-item"><span class="key key--3"></span>Other payments</span>
+        ${names.map((n, k) => `<span class="legend-item"><span class="key key--${k + 1}"></span>${esc(n)}</span>`).join('')}
       </div>
-      ${columns(a.fees.map((m, i) => ({ label: m.label, short: m.label.split(' ')[0], values: [m.amount, a.teacher_payments[i].amount, other[i].amount] })),
-        ['Fees collected', 'Paid to teachers', 'Other payments'])}
-      ${table(['Month', 'Fees collected', 'Paid to teachers', 'Other payments', 'Left over'],
-        a.fees.map((m, i) => [m.label, money(m.amount), money(a.teacher_payments[i].amount), money(other[i].amount), money(m.amount - paidOut(i))]))}
+      ${columns(a.fees.map((m, i) => ({ label: m.label, short: m.label.split(' ')[0], values: valuesAt(i) })), names)}
+      ${table(['Month', ...names, 'Left over'],
+        a.fees.map((m, i) => [m.label, ...valuesAt(i).map(money), money(m.amount - paidOut(i))]))}
     </section>
 
     <section class="card" aria-labelledby="c-other">
@@ -92,7 +95,7 @@ function draw(a, note) {
       <h2 class="card-title" id="c-enq">Enquiries, last 6 months</h2>
       ${a.conversion.enquiries ? `
         <div class="meter-row">
-          <p class="meter-text"><strong>${a.conversion.joined} of ${a.conversion.enquiries}</strong> enquiries joined (${convPct}%)</p>
+          <p class="meter-text"><strong>${a.conversion.joined} of ${a.conversion.enquiries}</strong> enquiries joined (${convPct}%)${a.conversion.demo ? `. ${a.conversion.demo} in demo classes now` : ''}</p>
           <span class="meter meter--big" role="img" aria-label="${convPct} percent joined"><span class="meter-fill" style="width:${convPct}%"></span></span>
         </div>
         <h3 class="card-subtitle">Where they heard about us</h3>
@@ -148,16 +151,16 @@ function columns(groups, names) {
   const ticks = [];
   for (let t = 0; t <= top + step / 2; t += step) ticks.push(t);
   return `
-    <div class="cols" role="img" aria-label="Column chart. The table below has the same numbers.">
+    <div class="cols${groups.length > 8 ? ' cols--many' : ''}" role="img" aria-label="Column chart. The table below has the same numbers.">
       <div class="cols-grid" aria-hidden="true">
         ${ticks.map((t) => `<div class="grid-line" style="bottom:${(100 * t) / top}%"><span>${esc(compactMoney(t))}</span></div>`).join('')}
       </div>
-      <div class="cols-plot">
+      <div class="cols-plot" style="grid-template-columns:repeat(${groups.length},minmax(0,1fr))">
         ${groups.map((g, i) => `
           <div class="col-group${i === groups.length - 1 ? ' is-now' : ''}" tabindex="0"
                data-tip="${esc(`${g.label}: ${names.map((n, k) => `${n} ${money(g.values[k])}`).join(', ')}`)}">
             <div class="col-bars">
-              ${g.values.map((v, k) => `<span class="col col--${k + 1}" style="height:${(100 * v) / top}%"></span>`).join('')}
+              ${g.values.map((v, k) => `<span class="col col--${k + 1}" style="height:${(100 * Math.max(0, v)) / top}%"></span>`).join('')}
             </div>
             <span class="col-x">${esc(g.short)}</span>
           </div>`).join('')}

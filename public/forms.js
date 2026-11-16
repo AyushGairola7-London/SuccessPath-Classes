@@ -19,9 +19,13 @@
 //   * `person` links the entry to a student or teacher in the register (see PERSON LINKS below).
 //   * No field is mandatory: fill in what you know. To make one mandatory, add `required: true` to it.
 //     (A completely empty form is never saved.)
+//   * `hidden: true` on a field keeps it off the office's form; the portals fill it in.
+//   * A money field refuses a minus amount, unless it has `minus`: `minus: 'ignore'` reads -6000 as
+//     6000, and `minus: 'refund'` saves the whole entry as that other form instead (a fee of -6000
+//     is saved as Money returned, ₹6,000).
 
 export const APP_NAME = 'SuccessPath Classes';
-export const APP_VERSION = '2.2.0';
+export const APP_VERSION = '3.1.0';
 
 // The order of the sections on the home screen.
 export const GROUPS = ['Students', 'Payments made', 'Teachers', 'Other'];
@@ -29,6 +33,9 @@ export const GROUPS = ['Students', 'Payments made', 'Teachers', 'Other'];
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const EXAMS = ['Half-yearly', 'Annual', 'Unit test', 'Pre-board', 'Board exam', 'Other'];
+// What a student can write to a teacher from the student portal.
+export const MESSAGE_KINDS = ['Complaint', 'Help with a topic', 'Notes for the teacher', 'Special requirement', 'Other'];
+const FEE_PLANS = ['Monthly', 'Every 3 months', 'Every 6 months', 'Yearly', 'One time'];
 
 const CLASSES = [
   'Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6',
@@ -79,7 +86,7 @@ export const FORMS = [
       { key: 'date', label: 'Date', kind: 'date', default: 'today', notFuture: true, column: 'entry_date' },
       { key: 'student_name', label: 'Student name', kind: 'student', column: 'name' },
       { key: 'class', label: 'Class', kind: 'select', options: CLASSES },
-      { key: 'amount', label: 'Amount', kind: 'money', min: 1, column: 'amount' },
+      { key: 'amount', label: 'Amount', kind: 'money', min: 1, column: 'amount', minus: 'refund' },
       { key: 'mode', label: 'Paid by', kind: 'choice', options: ['Cash', 'UPI', 'Bank transfer', 'Cheque', 'Card'] },
       { key: 'fee_for', label: 'Fee for', kind: 'months', extraChoices: ['Admission fee'], hint: 'Tap every month this payment covers.' },
       { key: 'reference', label: 'UPI or cheque number', kind: 'text', hint: 'Leave empty for cash.' },
@@ -97,9 +104,14 @@ export const FORMS = [
     group: 'Students',
     color: '#2C5FC4',
     summary: ['student_name', 'class', 'phone'],
+    // A new name is added to Students as an Enquiry. From their page: Move to demo, then Full admission.
+    person: {
+      kind: 'student', field: 'student_name', classField: 'class', phoneField: 'phone', add: true, status: 'Enquiry',
+      fill: { class: 'class', phone: 'phone' }, details: ['parent_name', 'email', 'school', 'subjects'],
+    },
     fields: [
       { key: 'date', label: 'Date', kind: 'date', default: 'today', notFuture: true, column: 'entry_date' },
-      { key: 'student_name', label: 'Student name', kind: 'name', column: 'name' },
+      { key: 'student_name', label: 'Student name', kind: 'student', column: 'name', hint: 'A new name is added to Students as an enquiry.' },
       { key: 'parent_name', label: 'Parent name', kind: 'name' },
       { key: 'phone', label: 'Phone number', kind: 'phone', column: 'phone' },
       { key: 'email', label: 'Email', kind: 'email' },
@@ -124,11 +136,12 @@ export const FORMS = [
     person: {
       kind: 'student', field: 'student_name', classField: 'class', phoneField: 'phone', add: true,
       status: 'Active', dateField: 'date', update: { class: 'class', phone: 'phone' },
-      details: ['parent_name', 'phone_2', 'school', 'subjects', 'fee_amount', 'fee_plan', 'address'],
+      details: ['enrollment_no', 'parent_name', 'phone_2', 'school', 'subjects', 'fee_amount', 'fee_plan', 'address'],
     },
     fields: [
       { key: 'date', label: 'Admission date', kind: 'date', default: 'today', notFuture: true, column: 'entry_date' },
       { key: 'student_name', label: 'Student name', kind: 'student', column: 'name' },
+      { key: 'enrollment_no', label: 'Enrollment number', kind: 'text', hint: 'The number in the paper register, if there is one.' },
       { key: 'parent_name', label: 'Father or guardian name', kind: 'name' },
       { key: 'phone', label: 'Phone number', kind: 'phone', column: 'phone' },
       { key: 'phone_2', label: 'Second phone number', kind: 'phone' },
@@ -136,7 +149,7 @@ export const FORMS = [
       { key: 'subjects', label: 'Subjects or batch', kind: 'text' },
       { key: 'school', label: 'School', kind: 'text' },
       { key: 'fee_amount', label: 'Fee agreed', kind: 'money', column: 'amount' },
-      { key: 'fee_plan', label: 'Fee is paid', kind: 'choice', options: ['Monthly', 'Every 3 months', 'Every 6 months', 'Yearly', 'One time'] },
+      { key: 'fee_plan', label: 'Fee is paid', kind: 'choice', options: FEE_PLANS },
       { key: 'address', label: 'Address', kind: 'textarea' },
       { key: 'notes', label: 'Notes', kind: 'textarea' },
     ],
@@ -184,6 +197,33 @@ export const FORMS = [
       { key: 'ends_on', label: 'Ends on', kind: 'date', notBefore: 'starts_on' },
       { key: 'subjects', label: 'Subjects or timetable', kind: 'textarea' },
       { key: 'notes', label: 'Notes', kind: 'textarea' },
+      { key: 'added_by', label: 'Added by', kind: 'text', hidden: true }, // "Student portal" when a student added it
+    ],
+  },
+  {
+    type: 'demo',
+    title: 'Demo classes',
+    noun: 'demo',
+    button: 'Move to demo',
+    prefix: 'DEM',
+    tab: 'Demo Classes',
+    group: 'Students',
+    color: '#6B4BC4',
+    hidden: true, // opened from an enquiry's page: Move to demo
+    summary: ['student_name', 'demo_from', 'subjects'],
+    // An enquiry moves to Demo; a student already admitted stays as they are.
+    person: {
+      kind: 'student', field: 'student_name', classField: 'class', phoneField: 'phone', add: true, status: 'Demo',
+      fill: { class: 'class', phone: 'phone' }, details: ['demo_from', 'subjects'],
+    },
+    fields: [
+      { key: 'demo_from', label: 'Demo classes from', kind: 'date', default: 'today', column: 'entry_date' },
+      { key: 'student_name', label: 'Student', kind: 'student', column: 'name' },
+      { key: 'class', label: 'Class', kind: 'select', options: CLASSES },
+      { key: 'phone', label: 'Phone number', kind: 'phone', column: 'phone' },
+      { key: 'subjects', label: 'Subjects or batch', kind: 'text' },
+      { key: 'teacher_name', label: 'With teacher', kind: 'teacher' },
+      { key: 'notes', label: 'Notes', kind: 'textarea' },
     ],
   },
   {
@@ -196,14 +236,36 @@ export const FORMS = [
     group: 'Students',
     color: '#5B6780',
     summary: ['student_name', 'class', 'reason'],
+    then: { type: 'refund', label: 'Record money returned' },
     person: { kind: 'student', field: 'student_name', classField: 'class', phoneField: 'phone', add: true, status: 'Left', dateField: 'date', fill: { phone: 'phone' } },
     fields: [
       { key: 'date', label: 'Date left', kind: 'date', default: 'today', notFuture: true, column: 'entry_date' },
       { key: 'student_name', label: 'Student name', kind: 'student', column: 'name' },
       { key: 'class', label: 'Class', kind: 'select', options: CLASSES },
       { key: 'phone', label: 'Phone number', kind: 'phone', column: 'phone' },
-      { key: 'reason', label: 'Why did they leave?', kind: 'choice', sheetLabel: 'Reason', options: ['Course finished', 'Moved to another city', 'Fees problem', 'Not happy with classes', 'Joined another institute', 'Other'] },
+      { key: 'reason', label: 'Why did they leave?', kind: 'choice', sheetLabel: 'Reason', options: ['Course finished', 'Moved to another city', 'Fees problem', 'Not happy with classes', 'Joined another institute', 'Did not join', 'Other'] },
       { key: 'fees_pending', label: 'Fees still to be paid', kind: 'money', column: 'amount' },
+      { key: 'notes', label: 'Notes', kind: 'textarea' },
+    ],
+  },
+  {
+    type: 'refund',
+    title: 'Money returned',
+    noun: 'refund',
+    button: 'Save',
+    prefix: 'RFD',
+    tab: 'Refunds',
+    group: 'Students',
+    color: '#B42318',
+    summary: ['student_name', 'amount', 'reason'],
+    person: { kind: 'student', field: 'student_name', classField: 'class', add: false, optional: true },
+    fields: [
+      { key: 'date', label: 'Date', kind: 'date', default: 'today', notFuture: true, column: 'entry_date' },
+      { key: 'student_name', label: 'Student', kind: 'student', column: 'name', hint: 'Choose from the list.' },
+      { key: 'class', label: 'Class', kind: 'select', options: CLASSES },
+      { key: 'amount', label: 'Money returned', kind: 'money', min: 1, column: 'amount', minus: 'ignore', hint: 'It counts as money paid out.' },
+      { key: 'mode', label: 'Returned by', kind: 'choice', options: ['Cash', 'UPI', 'Bank transfer', 'Cheque', 'Card'] },
+      { key: 'reason', label: 'Why', kind: 'text', placeholder: 'For example: left after two months' },
       { key: 'notes', label: 'Notes', kind: 'textarea' },
     ],
   },
@@ -297,6 +359,55 @@ export const FORMS = [
     ],
   },
   {
+    type: 'teacher_enquiry',
+    title: 'Teacher enquiry',
+    noun: 'teacher enquiry',
+    button: 'Save enquiry',
+    prefix: 'TEQ',
+    tab: 'Teacher Enquiries',
+    group: 'Teachers',
+    color: '#4E5BA6',
+    summary: ['teacher_name', 'subjects', 'outcome'],
+    person: {
+      kind: 'teacher', field: 'teacher_name', phoneField: 'phone', add: true, status: 'Enquiry',
+      fill: { phone: 'phone' }, details: ['subjects', 'classes', 'qualification', 'experience', 'salary_asked', 'address'],
+    },
+    fields: [
+      { key: 'date', label: 'Date', kind: 'date', default: 'today', notFuture: true, column: 'entry_date' },
+      { key: 'teacher_name', label: 'Name', kind: 'teacher', column: 'name', hint: 'They are kept under Teachers, Enquiries. They are not counted as a teacher.' },
+      { key: 'phone', label: 'Phone number', kind: 'phone', column: 'phone' },
+      { key: 'subjects', label: 'Subjects', kind: 'text', placeholder: 'For example: Maths, Physics' },
+      { key: 'classes', label: 'Classes they can teach', kind: 'text' },
+      { key: 'qualification', label: 'Qualification', kind: 'text' },
+      { key: 'experience', label: 'Experience', kind: 'text', placeholder: 'For example: 3 years at a school' },
+      { key: 'salary_asked', label: 'Salary asked for', kind: 'money', column: 'amount' },
+      { key: 'source', label: 'How did they find us?', kind: 'choice', options: ['Walk-in', 'Reference', 'Newspaper or poster', 'Online', 'Other'] },
+      { key: 'outcome', label: 'What was decided?', kind: 'choice', options: ['Not hired', 'Maybe later', 'Interview planned'] },
+      { key: 'address', label: 'Address', kind: 'textarea' },
+      { key: 'notes', label: 'Notes', kind: 'textarea' },
+    ],
+  },
+  {
+    type: 'leave',
+    title: 'Teacher leave',
+    noun: 'leave',
+    button: 'Save leave',
+    prefix: 'LVE',
+    tab: 'Teacher Leave',
+    group: 'Teachers',
+    color: '#9A3F7A',
+    summary: ['teacher_name', 'from', 'reason'],
+    person: { kind: 'teacher', field: 'teacher_name', add: true },
+    fields: [
+      { key: 'teacher_name', label: 'Teacher', kind: 'teacher', column: 'name', hint: 'Choose from the list.' },
+      { key: 'from', label: 'From', kind: 'date', default: 'today', column: 'entry_date' },
+      { key: 'to', label: 'To (last day of leave)', kind: 'date', notBefore: 'from', hint: 'Leave empty if it is one day.' },
+      { key: 'reason', label: 'Reason', kind: 'choice', options: ['Sick', 'Family function', 'Personal work', 'Travel', 'Festival', 'Other'] },
+      { key: 'notes', label: 'Notes', kind: 'textarea', placeholder: 'For example: only the evening batch' },
+      { key: 'request_code', label: 'Asked for in the portal', kind: 'text', hidden: true }, // LRQ-0001 when approved from a request
+    ],
+  },
+  {
     type: 'complaint',
     title: 'New complaint',
     noun: 'complaint',
@@ -319,6 +430,23 @@ export const FORMS = [
     ],
   },
   {
+    type: 'holiday',
+    title: 'Holiday',
+    noun: 'holiday',
+    button: 'Save holiday',
+    prefix: 'HOL',
+    tab: 'Holidays',
+    group: 'Other',
+    color: '#C2410C',
+    summary: ['holiday', 'from'],
+    fields: [
+      { key: 'holiday', label: 'Holiday', kind: 'text', column: 'name', placeholder: 'For example: Diwali' },
+      { key: 'from', label: 'From', kind: 'date', column: 'entry_date' },
+      { key: 'to', label: 'To (last day)', kind: 'date', notBefore: 'from', hint: 'Leave empty if it is one day.' },
+      { key: 'notes', label: 'Notes', kind: 'textarea', placeholder: 'For example: classes start again on Monday' },
+    ],
+  },
+  {
     type: 'note',
     title: 'Add note',
     noun: 'note',
@@ -336,6 +464,29 @@ export const FORMS = [
       { key: 'note', label: 'Note', kind: 'textarea' },
     ],
   },
+  {
+    type: 'portal_message',
+    title: 'Portal message',
+    noun: 'message',
+    button: 'Send message',
+    prefix: 'MSG',
+    tab: 'Portal Messages',
+    group: 'Other',
+    color: '#0E7490',
+    hidden: true, // between one student and one teacher, sent from the portals, either way
+    summary: ['student_name', 'teacher_name', 'about'],
+    person: { kind: 'student', field: 'student_name', classField: 'class', add: false },
+    fields: [
+      { key: 'date', label: 'Date', kind: 'date', default: 'today', column: 'entry_date' },
+      { key: 'student_name', label: 'Student', kind: 'student', column: 'name' },
+      { key: 'class', label: 'Class', kind: 'select', options: CLASSES },
+      { key: 'teacher_name', label: 'Teacher', kind: 'teacher' },
+      { key: 'teacher_code', label: 'Teacher ID', kind: 'text' },
+      { key: 'from', label: 'Sent by', kind: 'choice', options: ['Student', 'Teacher'] }, // empty on the first messages: the student
+      { key: 'about', label: 'About', kind: 'choice', options: MESSAGE_KINDS },
+      { key: 'message', label: 'Message', kind: 'textarea' },
+    ],
+  },
 ];
 
 // Columns of the Students and Teachers tabs in the Google Sheet.
@@ -344,6 +495,7 @@ export const REGISTER_COLUMNS = {
   student: [
     { key: 'code', label: 'Student ID', kind: 'code' },
     { key: 'name', label: 'Name', kind: 'text' },
+    { key: 'd.enrollment_no', label: 'Enrollment no.', kind: 'text' },
     { key: 'class', label: 'Class', kind: 'text' },
     { key: 'status', label: 'Status', kind: 'status' },
     { key: 'phone', label: 'Phone number', kind: 'phone' },
@@ -355,6 +507,7 @@ export const REGISTER_COLUMNS = {
     { key: 'd.fee_amount', label: 'Fee agreed (₹)', kind: 'money' },
     { key: 'd.fee_plan', label: 'Fee plan', kind: 'text' },
     { key: 'total_paid', label: 'Total fees paid (₹)', kind: 'money' },
+    { key: 'refunded', label: 'Money returned (₹)', kind: 'money' },
     { key: 'payments', label: 'Payments', kind: 'number' },
     { key: 'last_paid_on', label: 'Last payment', kind: 'date' },
     { key: 'last_amount', label: 'Last amount (₹)', kind: 'money' },
@@ -372,6 +525,8 @@ export const REGISTER_COLUMNS = {
     { key: 'd.classes', label: 'Classes or batches', kind: 'text' },
     { key: 'd.salary', label: 'Salary per month (₹)', kind: 'money' },
     { key: 'd.qualification', label: 'Qualification', kind: 'text' },
+    { key: 'd.experience', label: 'Experience', kind: 'text' },
+    { key: 'd.salary_asked', label: 'Salary asked for (₹)', kind: 'money' },
     { key: 'joined_on', label: 'Joining date', kind: 'date' },
     { key: 'left_on', label: 'Left on', kind: 'date' },
     { key: 'total_paid', label: 'Total paid (₹)', kind: 'money' },
@@ -383,15 +538,58 @@ export const REGISTER_COLUMNS = {
   ],
 };
 
+// Fields on a student's or teacher's "Edit details" page. `to` names the column of the register
+// it changes; the others are details first given on the admission or new-teacher form.
+// `ifLeft` fields show only for someone who has left.
+export const PERSON_EDIT_FIELDS = {
+  student: [
+    { key: 'listed_as', label: 'In the student list as', kind: 'choice', options: ['Enquiry', 'Demo', 'Student'], to: 'status',
+      values: { Enquiry: 'Enquiry', Demo: 'Demo', Student: 'Active' }, ifStatus: ['Enquiry', 'Demo', 'Active'] },
+    { key: 'name', label: 'Student name', kind: 'name', to: 'name', required: true },
+    { key: 'enrollment_no', label: 'Enrollment number', kind: 'text' },
+    { key: 'class', label: 'Class', kind: 'select', options: CLASSES, to: 'class' },
+    { key: 'phone', label: 'Phone number', kind: 'phone', to: 'phone' },
+    { key: 'phone_2', label: 'Second phone number', kind: 'phone' },
+    { key: 'parent_name', label: 'Father or guardian name', kind: 'name' },
+    { key: 'school', label: 'School', kind: 'text' },
+    { key: 'subjects', label: 'Subjects or batch', kind: 'text' },
+    { key: 'fee_amount', label: 'Fee agreed', kind: 'money' },
+    { key: 'fee_plan', label: 'Fee is paid', kind: 'choice', options: FEE_PLANS },
+    { key: 'email', label: 'Email', kind: 'email' },
+    { key: 'demo_from', label: 'Demo classes from', kind: 'date' },
+    { key: 'joined_on', label: 'Admission date', kind: 'date', to: 'joined_on' },
+    { key: 'left_on', label: 'Left on', kind: 'date', to: 'left_on', ifLeft: true },
+    { key: 'address', label: 'Address', kind: 'textarea' },
+  ],
+  teacher: [
+    { key: 'listed_as', label: 'In the teacher list as', kind: 'choice', options: ['Teacher', 'Enquiry, not hired'], to: 'status',
+      values: { Teacher: 'Active', 'Enquiry, not hired': 'Enquiry' }, ifStatus: ['Active', 'Enquiry'] },
+    { key: 'name', label: 'Teacher name', kind: 'name', to: 'name', required: true },
+    { key: 'phone', label: 'Phone number', kind: 'phone', to: 'phone' },
+    { key: 'subjects', label: 'Subjects', kind: 'text' },
+    { key: 'classes', label: 'Classes or batches', kind: 'text' },
+    { key: 'salary', label: 'Salary per month', kind: 'money' },
+    { key: 'qualification', label: 'Qualification', kind: 'text' },
+    { key: 'experience', label: 'Experience', kind: 'text' },
+    { key: 'salary_asked', label: 'Salary asked for', kind: 'money' },
+    { key: 'joined_on', label: 'Joining date', kind: 'date', to: 'joined_on' },
+    { key: 'left_on', label: 'Last working day', kind: 'date', to: 'left_on', ifLeft: true },
+    { key: 'address', label: 'Address', kind: 'textarea' },
+  ],
+};
+
 // Columns of the Tasks tab in the Google Sheet.
 export const TASK_STAGES = ['To do', 'Doing', 'Done'];
 export const TASK_COLUMNS = [
   { key: 'code', label: 'Task ID', kind: 'code' },
   { key: 'title', label: 'Task', kind: 'text' },
   { key: 'stage', label: 'Stage', kind: 'status' },
-  { key: 'due_on', label: 'Due on', kind: 'date' },
-  { key: 'owner', label: 'Who', kind: 'text' },
+  { key: 'start_on', label: 'Start date', kind: 'date' },
+  { key: 'due_on', label: 'End date', kind: 'date' },
+  { key: 'budget', label: 'Budget (₹)', kind: 'money' },
+  { key: 'owner', label: 'Owner', kind: 'text' },
   { key: 'notes', label: 'Notes', kind: 'text' },
+  { key: 'changed_by', label: 'Last changed by', kind: 'text' },
   { key: 'created_at', label: 'Added', kind: 'timestamp' },
   { key: 'done_at', label: 'Done on', kind: 'timestamp' },
 ];
@@ -399,6 +597,43 @@ export const TASK_COLUMNS = [
 /* ------------------------------------------------------------------ */
 /* Everything below is shared code. You should not need to change it.  */
 /* ------------------------------------------------------------------ */
+
+const ROMAN = { i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10, xi: 11, xii: 12 };
+const NOT_A_CLASS = /^\s*(?:batch|batches|student|students|hour|hours|hrs|hr|day|days|week|weeks|month|months|year|years|yrs|am|pm|a\.m|p\.m|:|%|minutes|mins)/;
+
+/**
+ * The classes a teacher teaches, read from the "Classes or batches" on their record, such as
+ * "9th, 10th", "Class 6-8", "IX & X", "11-12 PCM", "JEE batch" or "All classes". The teacher
+ * portal uses it for "My students"; the teacher's page in the office app shows what it found.
+ */
+export function classesFromText(text) {
+  let t = ` ${String(text || '').toLowerCase().replace(/[–—]/g, '-')} `;
+  const found = new Set();
+  const numbered = CLASSES.filter((c) => /^Class \d+$/.test(c));
+  if (/\ball\b/.test(t)) for (const c of numbered) found.add(c);
+  // Roman numerals: VI to XII anywhere, I to V only after "class" or "std" (so "I teach" is not class 1).
+  t = t.replace(/\b(class|std|standard)\.?\s*(iii|ii|iv|v|i)\b/g, (m, word, r) => `${word} ${ROMAN[r]}`);
+  t = t.replace(/\b(xii|xi|x|ix|viii|vii|vi)\b/g, (m) => ` ${ROMAN[m]} `);
+  t = t.replace(/(\d{1,2})\s*(-|to)\s*(iii|ii|iv|v|i)\b/g, (m, a, dash, r) => `${a}-${ROMAN[r]}`);
+  const add = (n) => { if (n >= 1 && n <= 12) found.add(`Class ${n}`); };
+  // "6-8" is classes 6, 7 and 8; "4-6 pm" is a time. Either way the numbers are then rubbed out.
+  const range = /(?<![\d:.])(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|to|till|until)\s*(\d{1,2})(?:st|nd|rd|th)?(?![\d:.])/g;
+  t = t.replace(range, (whole, a, b, offset, all) => {
+    if (!NOT_A_CLASS.test(all.slice(offset + whole.length)) && Number(a) <= Number(b) && Number(b) - Number(a) <= 11) {
+      for (let n = Number(a); n <= Number(b); n++) add(n);
+    }
+    return ' '.repeat(whole.length);
+  });
+  let m;
+  const single = /(?<![\d:.])(\d{1,2})(?:st|nd|rd|th)?(?![\d:.])/g;
+  while ((m = single.exec(t))) {
+    if (NOT_A_CLASS.test(t.slice(m.index + m[0].length))) continue;
+    add(Number(m[1]));
+  }
+  if (/\b(college|graduat|degree|b\.?\s?sc|b\.?\s?com|bba|bca|undergrad)/.test(t)) found.add('College');
+  if (/\b(competitive|jee|neet|ssc|upsc|cuet|nda|cds|olympiad|ntse|banking)/.test(t)) found.add('Competitive exam');
+  return CLASSES.filter((c) => found.has(c));
+}
 
 export const FIELD_KINDS = ['name', 'text', 'phone', 'email', 'date', 'money', 'number', 'select', 'choice', 'months', 'textarea', 'student', 'teacher', 'person'];
 export const PICKER_KINDS = ['student', 'teacher', 'person'];
@@ -452,6 +687,36 @@ export function indiaToday() {
  * Checks and tidies one entry. Unknown fields are dropped.
  * Returns { ok, data, errors } where errors maps a field key to a message for the person typing.
  */
+/**
+ * A fee typed with a minus amount is money given back. Returns { form, data } to save instead
+ * (the Money returned form, with the amount made positive), or null when nothing changes.
+ * Values the other form has no place for (fee months, cheque number) are left out.
+ */
+export function swapForMinus(form, data, today) {
+  const field = form && data && form.fields.find((f) => f.kind === 'money' && f.minus && f.minus !== 'ignore'
+    && typeof data[f.key] === 'number' && data[f.key] < 0);
+  if (!field) return null;
+  const target = getForm(field.minus);
+  if (!target) return null;
+  const out = {};
+  for (const f of target.fields) {
+    if (data[f.key] === undefined) continue;
+    const value = f.key === field.key ? -data[f.key] : data[f.key];
+    const result = cleanValue(f, value, today);
+    if (!result.error && result.value !== '') out[f.key] = result.value;
+  }
+  // what the other form has no place for (the months, a cheque number) goes into its notes
+  const notes = target.fields.find((f) => f.kind === 'textarea');
+  const extra = form.fields
+    .filter((f) => f !== field && data[f.key] !== undefined && data[f.key] !== '' && out[f.key] === undefined)
+    .map((f) => `${f.label}: ${Array.isArray(data[f.key]) ? data[f.key].join(', ') : data[f.key]}`);
+  if (notes && extra.length) {
+    const result = cleanValue(notes, [out[notes.key], ...extra].filter(Boolean).join('\n'), today);
+    if (!result.error && result.value !== '') out[notes.key] = result.value;
+  }
+  return { form: target, data: out };
+}
+
 export function validateEntry(form, input, today) {
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const data = {};
@@ -476,6 +741,42 @@ export function validateEntry(form, input, today) {
     }
   }
   return { ok: Object.keys(errors).length === 0, data, errors };
+}
+
+/**
+ * Should this student have paid by `today`? Monthly (or no plan given): every month. Longer plans:
+ * when the last payment is older than the plan's period. One time: only if nothing was ever paid.
+ * (Whether this month is already paid is checked separately.)
+ */
+export function feeIsDue(plan, lastPaidOn, today) {
+  const p = plan || 'Monthly';
+  if (p === 'Monthly') return true;
+  if (!lastPaidOn) return true;
+  if (p === 'One time') return false;
+  const months = { 'Every 3 months': 3, 'Every 6 months': 6, Yearly: 12 }[p] || 1;
+  const [y, m] = today.slice(0, 7).split('-').map(Number);
+  const back = new Date(Date.UTC(y, m - 1 - months, 1)).toISOString().slice(0, 7);
+  return lastPaidOn < `${back}${today.slice(7)}`;
+}
+
+/**
+ * Checks the values from the "Edit details" page. Only the fields that were sent change; an empty
+ * value clears that detail. The name cannot be emptied. Returns { ok, values, errors }.
+ */
+export function validatePersonEdit(kind, input, today) {
+  const fields = PERSON_EDIT_FIELDS[kind];
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const values = {};
+  const errors = {};
+  if (!fields) return { ok: false, values, errors: { _form: 'Unknown list.' } };
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(source, field.key)) continue;
+    const result = cleanValue(field, source[field.key], today);
+    if (result.error) errors[field.key] = result.error;
+    else values[field.key] = result.value === '' ? null : result.value;
+  }
+  if (!Object.keys(values).length && !Object.keys(errors).length) errors._form = 'Nothing to change.';
+  return { ok: Object.keys(errors).length === 0, values, errors };
 }
 
 /** Values copied into the fixed database columns (entry_date, name, phone, amount). */
@@ -554,6 +855,13 @@ export function checkForms(forms = FORMS) {
     for (const field of form.fields) {
       if (field.notMoreThan && !keys.has(field.notMoreThan)) problems.push(`${where}, field "${field.key}": notMoreThan names a field that does not exist.`);
       if (field.notBefore && !form.fields.some((f) => f.key === field.notBefore && f.kind === 'date')) problems.push(`${where}, field "${field.key}": notBefore must name a date field.`);
+      if (field.minus !== undefined) {
+        const target = field.minus === 'ignore' ? null : forms.find((f) => f.type === field.minus);
+        if (field.kind !== 'money') problems.push(`${where}, field "${field.key}": only a money field can have minus.`);
+        else if (field.minus !== 'ignore' && !(target && target.type !== form.type && target.fields.some((f) => f.key === field.key && f.kind === 'money' && f.minus !== field.minus))) {
+          problems.push(`${where}, field "${field.key}": minus must be 'ignore' or name another form with a money field "${field.key}".`);
+        }
+      }
     }
     for (const key of form.summary || []) {
       if (!keys.has(key)) problems.push(`${where}: summary lists "${key}", which is not a field.`);
@@ -566,7 +874,10 @@ export function checkForms(forms = FORMS) {
         if (p[k] && !keys.has(p[k])) problems.push(`${where}: person ${k} "${p[k]}" is not a field.`);
       }
       if (p.kind === 'any' && p.add) problems.push(`${where}: a person of kind "any" cannot be added automatically.`);
-      if (p.status && !['Active', 'Left'].includes(p.status)) problems.push(`${where}: person status must be Active or Left.`);
+      if (p.status && !['Active', 'Left', 'Enquiry', 'Demo'].includes(p.status)) problems.push(`${where}: person status must be Active, Left, Enquiry or Demo.`);
+      if (p.status === 'Enquiry' && !['student', 'teacher'].includes(p.kind)) problems.push(`${where}: only students and teachers can be enquiries.`);
+      if (p.status === 'Demo' && p.kind !== 'student') problems.push(`${where}: only students take demo classes.`);
+      if (form.then && !FORMS.some((f) => f.type === form.then.type)) problems.push(`${where}: "then" names a form that does not exist.`);
       for (const k of ['update', 'fill']) {
         for (const [column, fieldKey] of Object.entries(p[k] || {})) {
           if (!PERSON_COLUMNS.includes(column)) problems.push(`${where}: person ${k} can only set ${PERSON_COLUMNS.join(' or ')}.`);
@@ -635,12 +946,16 @@ function cleanValue(field, raw, today) {
       return { value };
     }
     case 'money': {
-      const text = String(raw).replace(/[₹,\s]/g, '').replace(/^rs\.?/i, '');
+      let text = String(raw).replace(/[₹,\s]/g, '').replace(/^rs\.?/i, '');
+      // a minus sign typed on a phone can be -, − or –
+      const minus = /^[-\u2212\u2013]/.test(text);
+      if (minus) text = text.slice(1);
       if (!/^\d+(\.\d{1,2})?$/.test(text)) return { error: 'Enter the amount in rupees, like 1500.' };
-      const value = Number(text);
-      if (value > MAX_MONEY) return { error: 'This amount looks too big. Please check it.' };
-      if (field.min !== undefined && value < field.min) return { error: `The amount must be at least ₹${field.min}.` };
-      return { value };
+      const size = Number(text);
+      if (minus && !field.minus) return { error: 'Enter the amount without a minus sign.' };
+      if (size > MAX_MONEY) return { error: 'This amount looks too big. Please check it.' };
+      if (field.min !== undefined && size < field.min) return { error: `The amount must be at least ₹${field.min}.` };
+      return { value: minus && field.minus !== 'ignore' ? -size : size };
     }
     case 'number': {
       const text = String(raw).replace(/[,\s]/g, '');

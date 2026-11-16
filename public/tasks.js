@@ -7,7 +7,7 @@
 import { APP_NAME, TASK_STAGES, MONTHS, indiaToday } from './forms.js';
 import {
   app, ui, store, esc, icon, timeOf, whenSaved, getJson, postJson, newId, topBar, tabBar, toast,
-  openOverlay, closePanel, dateFromIso,
+  openOverlay, closePanel, dateFromIso, money,
 } from './lib.js';
 
 const SAVED_KEY = 'sp.tasks.v1';
@@ -46,14 +46,22 @@ export function renderTasks() {
         </div>
         <p class="field-error" id="task-add-error" data-add-error hidden></p>
         <details class="task-more">
-          <summary>Add a date, who or notes</summary>
+          <summary>Add dates, budget, owner or notes</summary>
           <div class="task-more-fields">
             <div class="field">
-              <label class="label" for="task-due">Due on</label>
+              <label class="label" for="task-start">Start date</label>
+              <input id="task-start" name="start_on" type="date">
+            </div>
+            <div class="field">
+              <label class="label" for="task-due">End date</label>
               <input id="task-due" name="due_on" type="date">
             </div>
             <div class="field">
-              <label class="label" for="task-owner">Who</label>
+              <label class="label" for="task-budget">Budget</label>
+              <div class="money"><span class="money-sign" aria-hidden="true">₹</span><input id="task-budget" name="budget" type="text" inputmode="decimal" maxlength="14" placeholder="0"></div>
+            </div>
+            <div class="field">
+              <label class="label" for="task-owner">Owner</label>
               <input id="task-owner" name="owner" type="text" maxlength="60" list="task-owners" placeholder="For example: Papa">
             </div>
             <div class="field">
@@ -170,15 +178,18 @@ function find(code) {
 function cardHtml(t) {
   const next = NEXT[t.stage];
   const due = t.stage === 'Done' ? null : dueText(t.due_on);
+  const starts = t.stage === 'To do' && t.start_on && t.start_on > today() ? `Starts ${dayMonth(t.start_on)}` : '';
   const firstLine = t.notes ? t.notes.split('\n')[0] : '';
   const done = t.stage === 'Done';
   const stamped = done ? dayMonth(utcToLocalIso(t.done_at)) : '';
   return `
     <li class="task${done ? ' is-done' : ''}${board.justDone === t.code ? ' just-done' : ''}" data-code="${esc(t.code)}"${WIDE && WIDE.matches ? ' draggable="true"' : ''}>
       <button type="button" class="task-open" data-open="${esc(t.code)}">${esc(t.title)}</button>
-      ${due || t.owner ? `
+      ${due || starts || t.owner || t.budget ? `
         <p class="task-meta">
+          ${starts ? `<span class="due due--plain">${esc(starts)}</span>` : ''}
           ${due ? `<span class="due due--${due.tone}">${esc(due.text)}</span>` : ''}
+          ${t.budget ? `<span class="budget">Budget ${esc(money(t.budget))}</span>` : ''}
           ${t.owner ? `<span class="who">${esc(t.owner)}</span>` : ''}
         </p>` : ''}
       ${firstLine ? `<p class="task-notes">${esc(firstLine)}${t.notes.includes('\n') ? '…' : ''}</p>` : ''}
@@ -245,7 +256,8 @@ function drawOwners() {
   if (!list) return;
   const names = new Set(((board.meta && board.meta.owners) || []).filter(Boolean));
   for (const t of board.tasks || []) if (t.owner) names.add(t.owner);
-  list.innerHTML = [...names].slice(0, 15).map((n) => `<option value="${esc(n)}"></option>`).join('');
+  for (const n of (board.meta && board.meta.teachers) || []) names.add(n);
+  list.innerHTML = [...names].slice(0, 40).map((n) => `<option value="${esc(n)}"></option>`).join('');
 }
 
 /* ---------------- Adding a task ---------------- */
@@ -259,10 +271,16 @@ function wireAdd(form) {
     e.preventDefault();
     const body = {
       title: title.value,
+      start_on: form.elements.namedItem('start_on').value || null,
       due_on: form.elements.namedItem('due_on').value || null,
+      budget: form.elements.namedItem('budget').value,
       owner: form.elements.namedItem('owner').value,
       notes: form.elements.namedItem('notes').value,
     };
+    if (body.start_on && body.due_on && body.due_on < body.start_on) {
+      showAddError('The end date cannot be before the start date.');
+      return;
+    }
     if (!body.title.trim()) {
       showAddError('Write what needs doing.');
       title.focus();
@@ -378,7 +396,7 @@ async function changeTask(code, patch) {
 }
 
 function sameOnScreen(a, b) {
-  return ['stage', 'title', 'due_on', 'owner', 'notes', 'position'].every((k) => (a[k] ?? null) === (b[k] ?? null))
+  return ['stage', 'title', 'start_on', 'due_on', 'budget', 'owner', 'notes', 'position'].every((k) => (a[k] ?? null) === (b[k] ?? null))
     && utcToLocalIso(a.done_at) === utcToLocalIso(b.done_at);
 }
 
@@ -405,23 +423,36 @@ function openTask(code) {
             ${TASK_STAGES.map((s) => `<button type="button" data-stage="${esc(s)}" aria-pressed="${s === stage}">${esc(s)}</button>`).join('')}
           </div>
         </div>
+        <div class="field" data-field="start_on">
+          <label class="label" for="edit-start">Start date</label>
+          <div class="date-row">
+            <input id="edit-start" name="start_on" type="date" value="${esc(t.start_on || '')}" aria-describedby="edit-start-error">
+            <button type="button" class="linkish" data-clear="start_on">No date</button>
+          </div>
+          <p class="field-error" id="edit-start-error" hidden></p>
+        </div>
         <div class="field" data-field="due_on">
-          <label class="label" for="edit-due">Due on</label>
+          <label class="label" for="edit-due">End date</label>
           <div class="date-row">
             <input id="edit-due" name="due_on" type="date" value="${esc(t.due_on || '')}" aria-describedby="edit-due-error">
-            <button type="button" class="linkish" data-clear-due>No date</button>
+            <button type="button" class="linkish" data-clear="due_on">No date</button>
           </div>
           <p class="field-error" id="edit-due-error" hidden></p>
         </div>
+        <div class="field" data-field="budget">
+          <label class="label" for="edit-budget">Budget</label>
+          <div class="money"><span class="money-sign" aria-hidden="true">₹</span><input id="edit-budget" name="budget" type="text" inputmode="decimal" maxlength="14" value="${esc(t.budget ?? '')}" aria-describedby="edit-budget-error"></div>
+          <p class="field-error" id="edit-budget-error" hidden></p>
+        </div>
         <div class="field">
-          <label class="label" for="edit-owner">Who</label>
+          <label class="label" for="edit-owner">Owner</label>
           <input id="edit-owner" name="owner" type="text" maxlength="60" list="task-owners" value="${esc(t.owner || '')}">
         </div>
         <div class="field">
           <label class="label" for="edit-notes">Notes</label>
           <textarea id="edit-notes" name="notes" rows="3" maxlength="2000">${esc(t.notes || '')}</textarea>
         </div>
-        <p class="panel-text">Added ${esc(whenSaved(t.created_at))}${t.done_at && t.stage === 'Done' ? `. Done ${esc(whenSaved(t.done_at))}` : ''}.</p>
+        <p class="panel-text">Added ${esc(whenSaved(t.created_at))}${t.done_at && t.stage === 'Done' ? `. Done ${esc(whenSaved(t.done_at))}` : ''}${t.changed_by ? `. Last changed by ${esc(t.changed_by)}` : ''}.</p>
         <p class="form-error" role="alert" hidden></p>
         <div class="panel-actions">
           <button class="btn btn-primary" type="submit">Save changes</button>
@@ -438,7 +469,9 @@ function openTask(code) {
       for (const x of overlay.querySelectorAll('[data-stage]')) x.setAttribute('aria-pressed', String(x === b));
     });
   }
-  overlay.querySelector('[data-clear-due]').addEventListener('click', () => { form.elements.namedItem('due_on').value = ''; });
+  for (const b of overlay.querySelectorAll('[data-clear]')) {
+    b.addEventListener('click', () => { form.elements.namedItem(b.getAttribute('data-clear')).value = ''; });
+  }
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -446,7 +479,17 @@ function openTask(code) {
     const value = (name) => form.elements.namedItem(name).value;
     const patch = {};
     if (value('title').replace(/\s+/g, ' ').trim() !== t.title) patch.title = value('title');
-    if ((value('due_on') || null) !== (t.due_on || null)) patch.due_on = value('due_on') || null;
+    // both dates go together, so the server can check the end is not before the start
+    if ((value('due_on') || null) !== (t.due_on || null) || (value('start_on') || null) !== (t.start_on || null)) {
+      patch.start_on = value('start_on') || null;
+      patch.due_on = value('due_on') || null;
+      if (patch.start_on && patch.due_on && patch.due_on < patch.start_on) {
+        showError('due_on', 'The end date cannot be before the start date.');
+        return;
+      }
+    }
+    const budgetNow = value('budget').replace(/[₹,\s]/g, '');
+    if (budgetNow !== (t.budget === null || t.budget === undefined ? '' : String(t.budget))) patch.budget = budgetNow;
     if (value('owner').replace(/\s+/g, ' ').trim() !== (t.owner || '')) patch.owner = value('owner');
     if (value('notes').replace(/\r\n?/g, '\n').trim() !== (t.notes || '')) patch.notes = value('notes');
     if (stage !== t.stage) patch.stage = stage;

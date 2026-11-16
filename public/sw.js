@@ -2,7 +2,7 @@
 // Always tries the internet first, so updates you deploy show up straight away.
 // Entries are never stored here; the page keeps unsent entries itself.
 
-const CACHE = 'successpath-v2-2';
+const CACHE = 'successpath-v3-1';
 const SHELL = [
   '/',
   '/app.js',
@@ -10,7 +10,14 @@ const SHELL = [
   '/entry.js',
   '/people.js',
   '/tasks.js',
+  '/calendar.js',
+  '/leave.js',
+  '/edit.js',
   '/analytics.js',
+  '/login.js',
+  '/portal.js',
+  '/teacher/',
+  '/student/',
   '/forms.js',
   '/styles.css',
   '/manifest.webmanifest',
@@ -56,7 +63,10 @@ async function networkFirst(request) {
     const cached = await cache.match(request, { ignoreSearch: true });
     if (cached) return cached;
     if (request.mode === 'navigate') {
-      const shell = await cache.match('/');
+      // each app opens its own page: the office app, or the teacher or student portal
+      const path = new URL(request.url).pathname;
+      const page = path.startsWith('/teacher') ? '/teacher/' : path.startsWith('/student') ? '/student/' : '/';
+      const shell = await cache.match(page);
       if (shell) return shell;
     }
     throw err;

@@ -742,7 +742,7 @@ function sendEntriesEmail_(dump, window, when, always) {
       const list = added.filter(function (e) { return e.type === tab.type; });
       if (!list.length) return;
       const total = list.reduce(function (s, e) { return s + (Number(e.amount) || 0); }, 0);
-      const money = tab.type === 'fee' || tab.type === 'teacher_payment' || tab.type === 'expense';
+      const money = ['fee', 'teacher_payment', 'expense', 'refund'].indexOf(tab.type) >= 0;
       html += '<tr><td style="' + cell + '">' + h_(tab.tab) + '</td><td style="' + cell + 'text-align:right">' + list.length
         + '</td><td style="' + cell + 'text-align:right">' + (money ? rupees_(total) : '') + '</td></tr>';
     });
@@ -778,6 +778,7 @@ function sendEntriesEmail_(dump, window, when, always) {
     + '<p style="margin:0">Fees collected: <b>' + rupees_(sum_(thisMonth, 'fee')) + '</b><br>'
     + 'Paid to teachers: <b>' + rupees_(sum_(thisMonth, 'teacher_payment')) + '</b><br>'
     + 'Other payments: <b>' + rupees_(sum_(thisMonth, 'expense')) + '</b><br>'
+    + (sum_(thisMonth, 'refund') ? 'Money returned to students: <b>' + rupees_(sum_(thisMonth, 'refund')) + '</b><br>' : '')
     + 'Active students: <b>' + (dump.people || []).filter(function (p) { return p.kind === 'student' && p.status === 'Active'; }).length + '</b></p>';
   if (paidTotal) html += '<p style="margin:8px 0 0;color:#46526D">Paid to teachers ' + h_(when) + ': ' + rupees_(paidTotal) + '</p>';
   html += comingUpHtml_(dump);
@@ -794,7 +795,7 @@ function sendEntriesEmail_(dump, window, when, always) {
   return added.length;
 }
 
-/** Tasks that are late or due in the next 7 days, and exams in the next 7 days (India dates). */
+/** Coming up in the next 7 days (India dates): late or due tasks, exams, holidays and teachers on leave. */
 function comingUpHtml_(dump) {
   const tz = SETTINGS.TIMEZONE;
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
@@ -814,7 +815,16 @@ function comingUpHtml_(dump) {
       return start && end >= today && start <= weekEnd;
     })
     .sort(function (a, b) { return String(a.entry_date) < String(b.entry_date) ? -1 : 1; });
-  if (!tasks.length && !exams.length) return '';
+  const covers = function (e) {
+    const data = e.data || {};
+    const start = e.entry_date || data.to;
+    const end = data.to || e.entry_date;
+    return start && end >= today && start <= weekEnd;
+  };
+  const byStart = function (a, b) { return String(a.entry_date) < String(b.entry_date) ? -1 : 1; };
+  const leaves = dump.entries.filter(function (e) { return e.type === 'leave' && e.status === 'Active' && covers(e); }).sort(byStart);
+  const holidays = dump.entries.filter(function (e) { return e.type === 'holiday' && e.status === 'Active' && covers(e); }).sort(byStart);
+  if (!tasks.length && !exams.length && !leaves.length && !holidays.length) return '';
   let html = '<h3 style="margin:22px 0 6px;font-size:16px">Coming up this week</h3><ul style="margin:0;padding-left:18px">';
   tasks.forEach(function (t) {
     const late = t.due_on < today;
@@ -827,6 +837,18 @@ function comingUpHtml_(dump) {
     const start = e.entry_date || data.ends_on;
     html += '<li>Exam from ' + h_(day(start)) + (data.ends_on && data.ends_on !== start ? ' to ' + h_(day(data.ends_on)) : '')
       + ': ' + h_(data.exam || 'Exam') + ', ' + h_(who) + (data.school ? ' (' + h_(data.school) + ')' : '') + '</li>';
+  });
+  const span = function (e) {
+    const data = e.data || {};
+    const start = e.entry_date || data.to;
+    return h_(day(start)) + (data.to && data.to !== start ? ' to ' + h_(day(data.to)) : '');
+  };
+  holidays.forEach(function (e) {
+    html += '<li>Holiday, institute closed: ' + span(e) + ', ' + h_(e.name || 'Holiday') + '</li>';
+  });
+  leaves.forEach(function (e) {
+    const data = e.data || {};
+    html += '<li>On leave: ' + h_(e.name || 'A teacher') + ', ' + span(e) + (data.reason ? ' (' + h_(data.reason) + ')' : '') + '</li>';
   });
   return html + '</ul>';
 }

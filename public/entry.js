@@ -6,12 +6,13 @@
 //   3. The server checks it again, saves it, links it to the student or teacher (adding them to the
 //      register if they are new) and returns its entry number, for example FEE-0012.
 
-import { APP_NAME, APP_VERSION, FORMS, GROUPS, PEOPLE, PICKER_KINDS, MONTHS, getForm, validateEntry, localToday, nameKey } from './forms.js';
+import { APP_NAME, APP_VERSION, FORMS, GROUPS, PEOPLE, PICKER_KINDS, MONTHS, getForm, validateEntry, swapForMinus, localToday, nameKey } from './forms.js';
 import {
   app, ui, store, outbox, recent, esc, icon, newId, randomHex, whenSaved, longDate, displayValue, announce, toast,
-  postJson, statusInner, updateStatus, topBar, tabBar, DRAFT_PREFIX, openOverlay, closePanel,
+  postJson, statusInner, updateStatus, topBar, tabBar, DRAFT_PREFIX, openOverlay, closePanel, bellButton,
 } from './lib.js';
 import { cachedPeople, findPerson, rememberPerson, personHref } from './people.js';
+import { logOut } from './login.js';
 
 let draftTimer = null;
 let flushing = false;
@@ -31,7 +32,10 @@ export function renderHome(keepScroll) {
     <header class="masthead">
       <div class="masthead-row">
         <h1 class="brand">${esc(APP_NAME)}</h1>
-        <span class="status" data-status>${statusInner()}</span>
+        <div class="masthead-end">
+          ${bellButton()}
+          <span class="status" data-status>${statusInner()}</span>
+        </div>
       </div>
       <p class="masthead-date">${esc(longDate(new Date()))}</p>
     </header>
@@ -51,9 +55,23 @@ export function renderHome(keepScroll) {
           ? `<ul class="recent-list">${items.map(recentItemHtml).join('')}</ul>`
           : '<p class="empty">Nothing saved from this device yet. Entries you save will be listed here so you can check them.</p>'}
       </section>
-      <footer class="foot">Version ${esc(APP_VERSION)}</footer>
+      <footer class="foot">Version ${esc(APP_VERSION)}${ui.logins ? ' <span aria-hidden="true">·</span> <button type="button" class="linkish foot-logout" data-logout>Log out of this phone</button>' : ''}</footer>
     </main>
     ${tabBar('home')}`;
+  const logoutButton = app.querySelector('[data-logout]');
+  if (logoutButton) {
+    let armed = null;
+    logoutButton.addEventListener('click', async () => {
+      if (!armed) {
+        logoutButton.textContent = 'Tap again to log out';
+        armed = setTimeout(() => { armed = null; logoutButton.textContent = 'Log out of this phone'; }, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      await logOut('admin');
+      window.dispatchEvent(new CustomEvent('sp:logout'));
+    });
+  }
   for (const button of app.querySelectorAll('[data-open]')) {
     button.addEventListener('click', () => openPanel(button.getAttribute('data-open')));
   }
@@ -142,7 +160,7 @@ function monthChoices(field, selected) {
   return list;
 }
 
-function fieldHtml(field, value) {
+export function fieldHtml(field, value) {
   const id = `f-${field.key}`;
   const star = field.required ? '<span class="req" aria-hidden="true">*</span>' : '';
   const hintId = field.hint ? `${id}-hint` : '';
@@ -215,7 +233,7 @@ function fieldHtml(field, value) {
   }
 }
 
-function collectValues(form, formEl) {
+export function collectValues(form, formEl) {
   const values = {};
   for (const field of form.fields) {
     if (field.kind === 'choice') {
@@ -251,7 +269,7 @@ function scheduleDraftSave() {
   draftTimer = setTimeout(saveDraftNow, 300);
 }
 
-function showErrors(formEl, errors) {
+export function showErrors(formEl, errors) {
   let first = null;
   for (const [key, message] of Object.entries(errors || {})) {
     const box = formEl.querySelector(`[data-field="${key}"]`);
@@ -270,7 +288,7 @@ function showErrors(formEl, errors) {
   }
 }
 
-function clearFieldError(target) {
+export function clearFieldError(target) {
   const box = target && target.closest ? target.closest('[data-field]') : null;
   if (!box || !box.classList.contains('has-error')) return;
   box.classList.remove('has-error');
@@ -308,7 +326,7 @@ export function renderForm(form, personCode) {
         <div class="entry-lines" style="--tile:${esc(form.color)}">
           ${notice}
           ${form.fields.some((f) => f.required) ? '<p class="req-note"><span class="req" aria-hidden="true">*</span> must be filled in</p>' : ''}
-          ${form.fields.map((f) => fieldHtml(f, values[f.key])).join('')}
+          ${form.fields.filter((f) => !f.hidden).map((f) => fieldHtml(f, values[f.key])).join('')}
           <div class="hp" aria-hidden="true"><label>Leave empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
         </div>
         <div class="actions">
@@ -348,6 +366,13 @@ function applyPerson(form, values, person) {
   const out = { ...values, [link.field]: person.name };
   if (link.classField && person.class) out[link.classField] = person.class;
   if (link.phoneField && person.phone && !out[link.phoneField]) out[link.phoneField] = person.phone;
+  // Details already known (for example from a teacher enquiry, when hiring): fill the empty boxes.
+  const saved = store.get(`sp.person.v1.${person.code}`, null);
+  const details = (saved && saved.data && saved.data.person && saved.data.person.details) || {};
+  if (details.salary_asked && !details.salary) details.salary = details.salary_asked;
+  for (const key of link.details || []) {
+    if (details[key] !== undefined && details[key] !== null && (out[key] === undefined || out[key] === '')) out[key] = details[key];
+  }
   return out;
 }
 
@@ -499,6 +524,11 @@ async function sendEntry(entry) {
       const extra = {};
       if (link && link.classField && entry.data[link.classField]) extra.class = entry.data[link.classField];
       if (link && link.phoneField && entry.data[link.phoneField]) extra.phone = entry.data[link.phoneField];
+      // an enquiry only makes a new person an enquiry, and a demo only moves an enquiry to Demo;
+      // neither changes someone already studying or teaching here
+      const known = findPerson(person.code);
+      if (link && link.status && (person.added || !['Enquiry', 'Demo'].includes(link.status)
+        || (link.status === 'Demo' && known && known.status === 'Enquiry'))) extra.status = link.status;
       rememberPerson(person.kind, { code: person.code, name: person.name, ...extra });
     }
     return { result: 'saved', code: res.data.entry.code, person };
@@ -531,22 +561,39 @@ async function submitForm(form, formEl, fromPerson) {
     return;
   }
 
+  // A fee typed with a minus amount is money given back: save it as Money returned.
+  let saveAs = form;
+  let data = checked.data;
+  const swap = swapForMinus(form, checked.data, localToday());
+  if (swap) {
+    const again = validateEntry(swap.form, swap.data, localToday());
+    if (!again.ok) {
+      errorBox.textContent = again.errors._form || 'Please check the fields marked in red.';
+      errorBox.hidden = false;
+      showErrors(formEl, again.errors);
+      return;
+    }
+    saveAs = swap.form;
+    data = again.data;
+  }
+
   button.disabled = true;
   button.textContent = 'Saving…';
   const pick = form.person ? picks[form.person.field] : null;
   const entry = {
     client_id: newId(),
     cancel_token: randomHex(16),
-    type: form.type,
-    data: checked.data,
+    type: saveAs.type,
+    data,
     person_code: pick ? pick.code : undefined,
     at: new Date().toISOString(),
   };
   // Keep it on the device first, so it survives a closed tab or a lost connection.
   outbox.add(entry);
   recent.put({
-    id: entry.client_id, type: form.type, data: checked.data, state: 'pending', at: entry.at,
+    id: entry.client_id, type: saveAs.type, data, state: 'pending', at: entry.at,
     token: entry.cancel_token, from: fromPerson ? fromPerson.code : undefined,
+    swappedFrom: swap ? form.type : undefined,
   });
   clearTimeout(draftTimer);
   store.remove(DRAFT_PREFIX + form.type);
@@ -613,13 +660,25 @@ function stampFor(item) {
   }
 }
 
+// A next step offered after saving, for example "Record money returned" after a student left.
+function thenHtml(form, item) {
+  if (!form.then || item.state === 'failed') return '';
+  const who = (item.person && item.person.code) || item.from || '';
+  const href = `#/new/${form.then.type}${who ? `?person=${encodeURIComponent(who)}` : ''}`;
+  return `<a class="btn btn-quiet btn-then" href="${esc(href)}" data-replace>${esc(form.then.label)}</a>`;
+}
+
 function personLine(item) {
   const p = item.person;
   if (!p || item.state !== 'saved') return '';
   const who = p.kind === 'teacher' ? 'teacher' : 'student';
-  const text = p.added
+  const form = getForm(item.type);
+  const enquiry = form && form.person && form.person.status === 'Enquiry';
+  let text = p.added
     ? `New ${who} added to ${p.kind === 'teacher' ? 'Teachers' : 'Students'}:`
     : `Saved to the ${who}'s record:`;
+  if (enquiry && p.added) text = p.kind === 'student' ? 'Added to Students as an enquiry:' : 'Added to Teachers, under Enquiries:';
+  if (form && form.person && form.person.status === 'Demo') text = p.added ? 'Added to Students, in demo classes:' : 'Moved to demo classes:';
   return `<p class="receipt-person">${esc(text)} <a href="${esc(personHref(p.code))}">${esc(p.name)} (${esc(p.code)})</a></p>`;
 }
 
@@ -654,6 +713,7 @@ export function renderSaved(id) {
           <span class="stamp-word">${esc(s.word)}</span>
         </div>
         <p class="receipt-text">${esc(s.text)}</p>
+        ${item.swappedFrom ? `<p class="receipt-text">Saved as ${esc(form.title.toLowerCase())}, because the amount had a minus sign.</p>` : ''}
         ${personLine(item)}
         ${linesHtml(form, item)}
       </section>
@@ -661,6 +721,7 @@ export function renderSaved(id) {
         ${item.state === 'failed'
           ? '<button class="btn btn-primary" type="button" data-action="fix">Fix and save again</button>'
           : `<a class="btn btn-primary" href="${esc(again)}" data-replace>Add another ${esc(form.noun)}</a>`}
+        ${thenHtml(form, item)}
         ${from ? `<a class="btn btn-quiet" href="${esc(personHref(from.code))}" data-replace>Back to ${esc(from.name)}</a>` : ''}
         <a class="btn btn-quiet" href="#/" data-replace>Go to home</a>
       </div>

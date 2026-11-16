@@ -3,7 +3,8 @@
 //
 //   npm run try                  then open http://localhost:8787
 //
-// Settings (optional): PORT=8787  DB_PATH=local-test.sqlite  SYNC_KEY=...
+// Settings (optional): PORT=8787  DB_PATH=local-test.sqlite  SYNC_KEY=...  ADMIN_PASSWORD=...  PORTAL_PASSWORD=...
+// With ADMIN_PASSWORD set, the logins and the portals (/teacher and /student) work as they do online.
 
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -19,6 +20,8 @@ const DB_PATH = process.env.DB_PATH || join(ROOT, 'local-test.sqlite');
 const env = {
   DB: createD1(DB_PATH, join(ROOT, 'migrations')),
   SYNC_KEY: process.env.SYNC_KEY || 'local-sync-key-for-testing-only',
+  ...(process.env.ADMIN_PASSWORD ? { ADMIN_PASSWORD: process.env.ADMIN_PASSWORD } : {}),
+  ...(process.env.PORTAL_PASSWORD ? { PORTAL_PASSWORD: process.env.PORTAL_PASSWORD } : {}),
 };
 
 const TYPES = {
@@ -49,7 +52,12 @@ const server = http.createServer(async (req, res) => {
       res.end(Buffer.from(await response.arrayBuffer()));
       return;
     }
-    const path = url.pathname === '/' ? '/index.html' : url.pathname;
+    if (url.pathname === '/teacher' || url.pathname === '/student') {
+      res.writeHead(307, { location: `${url.pathname}/` });
+      res.end();
+      return;
+    }
+    const path = url.pathname.endsWith('/') ? `${url.pathname}index.html` : url.pathname;
     const file = normalize(join(PUBLIC, path));
     if (!file.startsWith(PUBLIC)) throw Object.assign(new Error('bad path'), { code: 'ENOENT' });
     const content = await readFile(file);

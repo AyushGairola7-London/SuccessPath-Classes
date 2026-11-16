@@ -221,19 +221,30 @@ function panelKeys(e) {
 
 /* ---------------- Talking to the server ---------------- */
 
+// Which login this page uses for the Tasks board (the office app, or the teacher portal).
+let apiRole = 'admin';
+export function setApiRole(role) { apiRole = role; }
+
+// The server answered "please log in": the page shows its login screen (entries waiting on this
+// device stay where they are).
+function loginNeeded(status, data) {
+  if (status === 401 && data && data.login) window.dispatchEvent(new CustomEvent('sp:login', { detail: data.login }));
+}
+
 export async function postJson(url, body) {
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), SEND_TIMEOUT_MS) : null;
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-successpath': '1' },
+      headers: { 'content-type': 'application/json', 'x-successpath': '1', 'x-successpath-as': apiRole },
       body: JSON.stringify(body),
       cache: 'no-store',
       signal: controller ? controller.signal : undefined,
     });
     let data = null;
     try { data = await res.json(); } catch (e) { /* not JSON */ }
+    loginNeeded(res.status, data);
     return { status: res.status, data };
   } finally {
     if (timer) clearTimeout(timer);
@@ -246,7 +257,7 @@ export async function getJson(url) {
   const timer = controller ? setTimeout(() => controller.abort(), SEND_TIMEOUT_MS) : null;
   let res;
   try {
-    res = await fetch(url, { headers: { 'x-successpath': '1' }, cache: 'no-store', signal: controller ? controller.signal : undefined });
+    res = await fetch(url, { headers: { 'x-successpath': '1', 'x-successpath-as': apiRole }, cache: 'no-store', signal: controller ? controller.signal : undefined });
   } catch (e) {
     throw new Error('No internet connection.');
   } finally {
@@ -254,7 +265,12 @@ export async function getJson(url) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { /* not JSON */ }
-  if (!res.ok || !data || !data.ok) throw new Error((data && data.error) || 'The server did not answer. Please try again.');
+  loginNeeded(res.status, data);
+  if (!res.ok || !data || !data.ok) {
+    const err = new Error((data && data.error) || 'The server did not answer. Please try again.');
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -275,6 +291,12 @@ const ICONS = {
   exam: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/><path d="M8 14.5h3M8 17h6"/>',
   tasks: '<path d="M4.5 6.6l1.7 1.7 3.1-3.2M4.5 12.6l1.7 1.7 3.1-3.2"/><rect x="4.6" y="17" width="4.4" height="3.6" rx="1"/><path d="M12.5 7h7.5M12.5 13h7.5M12.5 18.8h7.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  edit: '<path d="M4.5 19.5l1.1-4.4L15.4 5.3a1.9 1.9 0 0 1 2.7 0l.6.6a1.9 1.9 0 0 1 0 2.7L8.9 18.4z"/><path d="M13.6 7.1l3.3 3.3"/>',
+  teacher_enquiry: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19.5c.6-3.3 2.8-5.2 5.5-5.2s4.9 1.9 5.5 5.2"/><path d="M16.3 8.4a2.3 2.3 0 1 1 3.3 2.1c-.8.4-1.1.9-1.1 1.7M18.5 14.7v.2"/>',
+  refund: '<path d="M8.5 7.5H4V3"/><path d="M4.3 7.4A8 8 0 1 1 4 13"/><path d="M9.5 9.5h5M9.5 12h5M11 9.5c2.4 0 2.4 4.6-1.5 4.6l3.6 3.4"/>',
+  leave: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/><path d="M9.6 13.1l4.8 4.6M14.4 13.1l-4.8 4.6"/>',
+  holiday: '<circle cx="12" cy="12" r="3.8"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
+  left: '<path d="M14 7.5V5H5v14h9v-2.5"/><path d="M10.5 12H20M16.5 8.5L20 12l-3.5 3.5"/>',
   entry: '<rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>',
   home: '<path d="M4 10.5L12 4l8 6.5V20h-5.5v-6h-5v6H4z"/>',
   students: '<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.6-3 2.8-4.8 5.5-4.8s4.9 1.8 5.5 4.8"/><circle cx="17" cy="9.2" r="2.4"/><path d="M16 14.3c2.3.3 4 1.8 4.5 4.2"/>',
@@ -287,6 +309,11 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  message: '<path d="M4.5 5.5h15v10.5H10l-5.5 4v-4z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/>',
+  share: '<circle cx="17.5" cy="5.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/><path d="M8.7 10.8l6.6-4.1M8.7 13.2l6.6 4.1"/>',
+  me: '<circle cx="12" cy="8" r="3.6"/><path d="M4.8 20c.8-3.9 3.6-6.1 7.2-6.1s6.4 2.2 7.2 6.1"/>',
+  send: '<path d="M4 12l16-7.5-5 15-3.5-6z"/><path d="M11.5 13.5L20 4.5"/>',
+  bell: '<path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4.5 1.8 6 2.5 6.5H4c.7-.5 2.5-2 2.5-6.5z"/><path d="M10 19.5a2.2 2.2 0 0 0 4 0"/>',
 };
 
 export function icon(name) {
@@ -315,24 +342,167 @@ export function topBar(title, back) {
     <header class="bar">
       ${back ? `<a class="bar-back" href="${esc(back)}" aria-label="Back">${icon('back')}</a>` : '<span class="bar-gap"></span>'}
       <h1 class="bar-title">${esc(title)}</h1>
+      ${bellButton()}
       <span class="status" data-status>${statusInner()}</span>
     </header>`;
 }
 
+/* ---------------- The notification bell (office app and both portals) ---------------- */
+
+// An app turns the bell on with setNotices({ load, seen, act }): load() gives { items, unread },
+// seen() tells the server the bell was opened, act(item, action) handles buttons such as Approve.
+const bell = { source: null, unread: 0, items: null, timer: null, at: 0 };
+
+export function setNotices(source) {
+  bell.source = source;
+  // screens drawn before the bell was turned on get it now, just before the status
+  for (const s of document.querySelectorAll('[data-status]')) {
+    const prev = s.previousElementSibling;
+    if (!prev || !prev.matches('[data-bell]')) s.insertAdjacentHTML('beforebegin', bellButton());
+  }
+  if (!bell.timer) {
+    bell.timer = setInterval(() => { if (!document.hidden) refreshNotices(); }, 60000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshNotices(); });
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('[data-bell]')) openNotices();
+    });
+  }
+  refreshNotices();
+}
+
+export function bellButton() {
+  if (!bell.source) return '';
+  const n = bell.unread;
+  return `<button type="button" class="bell" data-bell aria-label="Notifications${n ? `, ${n} new` : ''}">${icon('bell')}<span class="bell-count" data-bell-count${n ? '' : ' hidden'}>${n > 9 ? '9+' : n}</span></button>`;
+}
+
+function paintBell() {
+  for (const b of document.querySelectorAll('[data-bell]')) {
+    const count = b.querySelector('[data-bell-count]');
+    count.hidden = !bell.unread;
+    count.textContent = bell.unread > 9 ? '9+' : String(bell.unread);
+    b.setAttribute('aria-label', `Notifications${bell.unread ? `, ${bell.unread} new` : ''}`);
+  }
+}
+
+export async function refreshNotices() {
+  if (!bell.source || navigator.onLine === false) return;
+  try {
+    const data = await bell.source.load();
+    bell.items = data.items || [];
+    bell.unread = data.unread || 0;
+    bell.at = Date.now();
+  } catch (err) {
+    return; // not logged in, or offline: the bell keeps what it had
+  }
+  paintBell();
+  const open = document.querySelector('[data-notices]');
+  if (open) drawNotices(open);
+}
+
+async function openNotices() {
+  const fresh = bell.items && Date.now() - bell.at < 20000; // older than that: wait for the latest
+  const overlay = openOverlay();
+  overlay.innerHTML = `
+    <div class="panel notices-panel" role="dialog" aria-modal="true" aria-labelledby="notices-title" data-notices>
+      <div class="panel-head">
+        <h2 class="panel-title" id="notices-title">Notifications</h2>
+        <button class="panel-close" type="button" data-close aria-label="Close">${icon('close')}</button>
+      </div>
+      <div data-notices-list>${fresh ? '' : '<p class="panel-text">Loading…</p>'}</div>
+    </div>`;
+  const panel = overlay.querySelector('[data-notices]');
+  overlay.querySelector('[data-close]').addEventListener('click', () => closePanel());
+  panel.addEventListener('click', async (e) => {
+    const go = e.target.closest('a[href]');
+    if (go) { closePanel(false); return; }
+    const b = e.target.closest('[data-act]');
+    if (!b || !bell.source.act) return;
+    const item = (bell.items || []).find((it) => it.code === b.getAttribute('data-code'));
+    if (!item) return;
+    if (b.getAttribute('data-act') === 'decline' && b.dataset.armed !== '1') {
+      // a decline cannot be undone, so it takes a second tap
+      b.dataset.armed = '1';
+      b.textContent = 'Tap again to decline';
+      setTimeout(() => { if (document.contains(b)) { b.dataset.armed = ''; b.textContent = 'Decline'; } }, 4000);
+      return;
+    }
+    for (const x of panel.querySelectorAll(`[data-code="${item.code}"]`)) x.disabled = true;
+    const done = await bell.source.act(item, b.getAttribute('data-act'));
+    if (done) await refreshNotices();
+    else for (const x of panel.querySelectorAll(`[data-code="${item.code}"]`)) x.disabled = false;
+  });
+  if (fresh) drawNotices(panel);
+  panel.querySelector('[data-close]').focus();
+  await refreshNotices();
+  // Opening the bell marks what is in it as seen (a leave request still waits for an answer).
+  try { await bell.source.seen(); } catch (err) { /* tried again next time */ }
+  bell.unread = (bell.items || []).filter((it) => it.action).length;
+  paintBell();
+}
+
+/** Forgets the bell and the tab counts, for logging out: the next person must not see them. */
+export function resetNotices() {
+  bell.items = null;
+  bell.unread = 0;
+  bell.at = 0;
+  for (const key of Object.keys(tabBadges)) setTabBadge(key, 0);
+  paintBell();
+}
+
+function drawNotices(panel) {
+  const list = panel.querySelector('[data-notices-list]');
+  const items = bell.items || [];
+  if (!items.length) {
+    list.innerHTML = '<p class="panel-text">Nothing new. Messages, leave and other news will show here.</p>';
+    return;
+  }
+  list.innerHTML = `<ul class="notices">${items.map((it) => `
+    <li class="notice-item${it.new ? ' is-new' : ''}">
+      <span class="notice-icon" aria-hidden="true">${icon(NOTICE_ICONS[it.kind] || 'bell')}</span>
+      <span class="notice-body">
+        <a class="notice-text" href="${esc(it.href || '#/')}">${esc(it.text)}</a>
+        ${it.sub ? `<span class="notice-sub">${esc(it.sub)}</span>` : ''}
+        <span class="notice-when">${it.new ? '<span class="notice-dot">New</span> ' : ''}${esc(whenSaved(it.at))}</span>
+        ${it.action ? `
+        <span class="notice-actions">
+          <button type="button" class="btn btn-primary" data-act="approve" data-code="${esc(it.code)}">Approve</button>
+          <button type="button" class="btn btn-quiet" data-act="decline" data-code="${esc(it.code)}">Decline</button>
+        </span>` : ''}
+      </span>
+    </li>`).join('')}</ul>`;
+}
+
+const NOTICE_ICONS = { leave_request: 'leave', leave: 'leave', message: 'message', exam: 'exam', task: 'tasks', marks: 'marks' };
+
+// The tabs along the bottom: the office app's, unless a portal sets its own.
+let tabs = [
+  ['home', '#/', 'Home', 'home'],
+  ['students', '#/students', 'Students', 'students'],
+  ['teachers', '#/teachers', 'Teachers', 'teachers'],
+  ['tasks', '#/tasks', 'Tasks', 'tasks'],
+  ['analytics', '#/analytics', 'Analytics', 'analytics'],
+];
+export function setTabs(list) { tabs = list; }
+
 /** The tabs along the bottom of the main screens. */
 export function tabBar(active) {
-  const tabs = [
-    ['home', '#/', 'Home', 'home'],
-    ['students', '#/students', 'Students', 'students'],
-    ['teachers', '#/teachers', 'Teachers', 'teachers'],
-    ['tasks', '#/tasks', 'Tasks', 'tasks'],
-    ['analytics', '#/analytics', 'Analytics', 'analytics'],
-  ];
   return `
     <nav class="tabbar" aria-label="Main">
       ${tabs.map(([key, href, label, ic]) => `
         <a class="tab${key === active ? ' is-active' : ''}" href="${href}"${key === active ? ' aria-current="page"' : ''}>
           ${icon(ic)}<span>${label}</span>
+          <span class="tab-badge" data-tab-badge="${key}"${tabBadges[key] ? '' : ' hidden'}>${tabBadges[key] > 9 ? '9+' : tabBadges[key] || ''}</span>
         </a>`).join('')}
     </nav>`;
+}
+
+// A number on a tab, such as unread messages or leave requests waiting.
+const tabBadges = {};
+export function setTabBadge(key, n) {
+  tabBadges[key] = n || 0;
+  for (const el of document.querySelectorAll(`[data-tab-badge="${key}"]`)) {
+    el.hidden = !n;
+    el.textContent = n > 9 ? '9+' : String(n || '');
+  }
 }
