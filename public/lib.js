@@ -140,6 +140,16 @@ export function initials(name) {
   return ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
 
+/** The few words that describe an entry, from the form's summary fields (name, amount and so on). */
+export function summaryText(form, data) {
+  return (form.summary || [])
+    .map((key) => {
+      const field = form.fields.find((f) => f.key === key);
+      return field ? displayValue(field, data[key]) : '';
+    })
+    .filter(Boolean);
+}
+
 export function displayValue(field, value) {
   if (value === undefined || value === null || value === '') return '';
   if (field.kind === 'money') return money(value);
@@ -314,6 +324,9 @@ const ICONS = {
   me: '<circle cx="12" cy="8" r="3.6"/><path d="M4.8 20c.8-3.9 3.6-6.1 7.2-6.1s6.4 2.2 7.2 6.1"/>',
   send: '<path d="M4 12l16-7.5-5 15-3.5-6z"/><path d="M11.5 13.5L20 4.5"/>',
   bell: '<path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4.5 1.8 6 2.5 6.5H4c.7-.5 2.5-2 2.5-6.5z"/><path d="M10 19.5a2.2 2.2 0 0 0 4 0"/>',
+  log: '<path d="M5 4.5h10.5a2 2 0 0 1 2 2V11"/><path d="M5 4.5v15h6"/><path d="M8.5 9h5.5M8.5 12.5h3.5"/><circle cx="16.5" cy="16.5" r="4"/><path d="M16.5 14.6v2l1.3 1.2"/>',
+  trash: '<path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2a1.6 1.6 0 0 0 1.6 1.5h6a1.6 1.6 0 0 0 1.6-1.5L17.5 7"/><path d="M10.2 11v6M13.8 11v6"/>',
+  restore: '<path d="M4.5 9.5V4.8M4.5 9.5h4.7"/><path d="M4.9 9.3A7.6 7.6 0 1 1 4.4 13"/>',
 };
 
 export function icon(name) {
@@ -410,6 +423,7 @@ async function openNotices() {
         <button class="panel-close" type="button" data-close aria-label="Close">${icon('close')}</button>
       </div>
       <div data-notices-list>${fresh ? '' : '<p class="panel-text">Loading…</p>'}</div>
+      ${bell.source.more ? `<a class="notices-more" href="${esc(bell.source.more.href)}">${esc(bell.source.more.label)}</a>` : ''}
     </div>`;
   const panel = overlay.querySelector('[data-notices]');
   overlay.querySelector('[data-close]').addEventListener('click', () => closePanel());

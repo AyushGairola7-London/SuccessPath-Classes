@@ -23,6 +23,7 @@ import { renderAnalytics } from './analytics.js';
 import { renderLogin, checkSession } from './login.js';
 import { setNotices, resetNotices, setTabBadge, getJson, postJson } from './lib.js';
 import { decideLeave } from './leave.js';
+import { renderLog } from './log.js';
 
 const RETRY_EVERY_MS = 20000;
 const auth = { needed: false };
@@ -65,6 +66,7 @@ function route() {
   }
   if (parts[0] === 'tasks') return renderTasks();
   if (parts[0] === 'analytics') return renderAnalytics();
+  if (parts[0] === 'log') return renderLog();
   return renderHome();
 }
 
@@ -105,6 +107,7 @@ function startBell() {
     },
     seen: () => postJson('/api/notices/seen', {}),
     act: (item, action) => decideLeave(item.code, action, item.text.replace(' asked for leave', '')),
+    more: { href: '#/log', label: 'Open the Activity log' },
   });
 }
 

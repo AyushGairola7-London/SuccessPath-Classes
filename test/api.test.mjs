@@ -1550,3 +1550,235 @@ test('messages go both ways in conversations, with unread counts, and the bell s
   const tab = schema.tabs.find((f) => f.type === 'portal_message');
   assert.ok(tab.columns.some((c) => c.label === 'Sent by'));
 });
+
+/* ---------------- Version 3.2: deleting a student or teacher, and the Activity log ---------------- */
+
+const deleteAs = (env, headers, code, note, clientId = ids().client_id) =>
+  call(env, 'POST', `/api/people/${code}/delete`, { headers, body: { client_id: clientId, note } });
+const restoreAs = (env, headers, code, clientId = ids().client_id) =>
+  call(env, 'POST', `/api/people/${code}/restore`, { headers, body: { client_id: clientId } });
+
+test('delete a student added by mistake: hidden everywhere, entries cancelled with the note, and Restore puts it all back', async () => {
+  const env = loginsEnv();
+  const school = await portalSchool(env);
+  const office = as(school.office);
+  const year = today.slice(0, 4);
+  const st = as((await loginAs(env, 'student', `rahulsharma${year}`, '1234')).cookie);
+  await call(env, 'POST', '/api/portal/student/messages', { headers: st, body: { client_id: ids().client_id, teacher_code: school.anita, about: 'Complaint', message: 'A test message' } });
+
+  const page = (await call(env, 'GET', `/api/people/${school.rahul}`, { headers: office })).data;
+  assert.deepEqual(Object.fromEntries(page.counts.map((c) => [c.type, c.n])), { admission: 1, exam: 1, fee: 1, marks: 1, portal_message: 1 });
+  assert.equal(page.deleted, null);
+
+  // a note is needed, and only the office can delete
+  assert.equal((await deleteAs(env, office, school.rahul, '   ')).status, 422);
+  assert.equal((await deleteAs(env, office, school.rahul, 'x'.repeat(301))).status, 422);
+  assert.equal((await deleteAs(env, st, school.rahul, 'Test')).status, 401);
+  assert.equal((await deleteAs(env, office, 'STU-0099', 'Test')).status, 404);
+
+  const clientId = ids().client_id;
+  const res = await deleteAs(env, office, school.rahul, 'Test entry, added by mistake', clientId);
+  assert.equal(res.status, 200);
+  assert.deepEqual([res.data.person.name, res.data.entries], ['Rahul Sharma', 5]);
+  assert.equal((await deleteAs(env, office, school.rahul, 'Test entry, added by mistake', clientId)).data.duplicate, true, 'sent twice: done once');
+  assert.equal((await deleteAs(env, office, school.rahul, 'Again')).status, 409);
+
+  // gone from the list, the analytics and the portal; the page says why, and nothing left the database
+  const list = (await call(env, 'GET', '/api/people?kind=student', { headers: office })).data.people;
+  assert.ok(!list.some((p) => p.code === school.rahul));
+  const gone = (await call(env, 'GET', `/api/people/${school.rahul}`, { headers: office })).data;
+  assert.deepEqual([gone.deleted.note, gone.deleted.entries, gone.person.status], ['Test entry, added by mistake', 5, 'Cancelled']);
+  assert.ok(gone.entries.every((e) => e.status === 'Cancelled' && e.cancel_reason === `Deleted with ${school.rahul}: Test entry, added by mistake`));
+  assert.deepEqual(gone.counts, []);
+  assert.equal((await call(env, 'GET', '/api/portal/student', { headers: st })).status, 401);
+  assert.notEqual((await loginAs(env, 'student', `rahulsharma${year}`, '1234')).status, 200);
+  const stats = (await call(env, 'GET', '/api/analytics', { headers: office })).data;
+  assert.ok(!JSON.stringify(stats).includes('Rahul Sharma'));
+  const kept = await env.DB.prepare('SELECT COUNT(*) AS n FROM entries WHERE person_id = (SELECT id FROM people WHERE code = ?1)').bind(school.rahul).first();
+  assert.equal(kept.n, 5);
+  await assert.rejects(env.DB.prepare('DELETE FROM audit_log').run(), /cannot be deleted/);
+  await assert.rejects(env.DB.prepare("UPDATE audit_log SET note = 'x'").run(), /cannot be changed/);
+
+  // restore: the student, their status and their entries come back
+  const back = await restoreAs(env, office, school.rahul);
+  assert.equal(back.status, 200);
+  assert.deepEqual([back.data.person.status, back.data.entries], ['Active', 5]);
+  const again = (await call(env, 'GET', `/api/people/${school.rahul}`, { headers: office })).data;
+  assert.equal(again.deleted, null);
+  assert.ok(again.entries.every((e) => e.status === 'Active' && !e.cancel_reason));
+  assert.equal((await loginAs(env, 'student', `rahulsharma${year}`, '1234')).status, 200);
+  assert.equal((await restoreAs(env, office, school.rahul)).status, 409, 'not deleted any more');
+  assert.ok((await call(env, 'GET', '/api/people?kind=student', { headers: office })).data.people.some((p) => p.code === school.rahul));
+});
+
+test('deleting a teacher declines their waiting leave requests; restore refuses a name someone else has now', async () => {
+  const env = loginsEnv();
+  const school = await portalSchool(env);
+  const office = as(school.office);
+  const t = as((await loginAs(env, 'teacher', 'vikramrawat2026', '1234')).cookie);
+  assert.equal((await call(env, 'POST', '/api/portal/teacher/leave-requests', { headers: t, body: { client_id: ids().client_id, from: addDays(today, 4) } })).status, 201);
+  const page = (await call(env, 'GET', `/api/people/${school.vikram}`, { headers: office })).data;
+  assert.equal(page.leave_requests.filter((r) => r.status === 'Pending').length, 1);
+
+  const res = await deleteAs(env, office, school.vikram, 'Added twice');
+  assert.equal(res.status, 200);
+  assert.equal((await call(env, 'GET', '/api/leave-requests', { headers: office })).data.requests.length, 0);
+  const req = await env.DB.prepare("SELECT status, decision_note FROM leave_requests WHERE code = 'LRQ-0001'").first();
+  assert.deepEqual([req.status, req.decision_note], ['Declined', `Deleted with ${school.vikram}: Added twice`]);
+  assert.equal((await call(env, 'GET', '/api/tasks', { headers: t })).status, 401);
+  const gone = (await call(env, 'GET', `/api/people/${school.vikram}`, { headers: office })).data;
+  assert.deepEqual([gone.deleted.entries, gone.deleted.requests], [1, 1]);
+
+  // someone else takes the name: restoring is refused until one of the names changes
+  const anita = (await call(env, 'GET', `/api/people/${school.anita}`, { headers: office })).data.person;
+  assert.equal((await call(env, 'POST', `/api/people/${school.anita}`, { headers: office, body: { updated_at: anita.updated_at, changes: { name: 'Vikram Rawat' } } })).status, 200);
+  const clash = await restoreAs(env, office, school.vikram);
+  assert.equal(clash.status, 409);
+  assert.match(clash.data.error, new RegExp(`${school.anita} is called Vikram Rawat now`));
+});
+
+test('edit details are logged with what changed; a refused edit is not', async () => {
+  const env = loginsEnv();
+  const school = await portalSchool(env);
+  const office = as(school.office);
+  const page = (await call(env, 'GET', `/api/people/${school.rahul}`, { headers: office })).data.person;
+  const edit = (body) => call(env, 'POST', `/api/people/${school.rahul}`, { headers: office, body });
+  assert.equal((await edit({ updated_at: page.updated_at, changes: { class: 'Class 10', school: '', fee_amount: '1800', joined_on: '2026-04-01' } })).status, 200);
+  assert.equal((await edit({ updated_at: page.updated_at, changes: { class: 'Class 11' } })).status, 409, 'opened before the change');
+  assert.equal((await edit({ changes: { class: 'Class 10' } })).status, 200, 'saved with nothing different');
+  const log = (await call(env, 'GET', '/api/log', { headers: office })).data;
+  const edits = log.items.filter((i) => i.source === 'audit' && i.action === 'edit');
+  assert.equal(edits.length, 1);
+  assert.deepEqual(edits[0].details.changes, [
+    { label: 'Class', from: 'Class 9', to: 'Class 10' },
+    { label: 'School', from: 'Doon School', to: 'empty' },
+    { label: 'Fee agreed', from: '₹1,500', to: '₹1,800' },
+    { label: 'Admission date', from: shortDay(today), to: '1 Apr 2026' },
+  ]);
+  assert.deepEqual([edits[0].who.role, edits[0].person.code], ['office', school.rahul]);
+});
+
+function shortDay(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${y}`;
+}
+
+test('the activity log: who did what, newest first, with filters, search and pages', async () => {
+  const env = loginsEnv();
+  const school = await portalSchool(env);
+  const office = as(school.office);
+  const year = today.slice(0, 4);
+  const st = as((await loginAs(env, 'student', `rahulsharma${year}`, '1234')).cookie);
+  const t = as((await loginAs(env, 'teacher', 'anitanegi2025', '1234')).cookie, { 'x-successpath-as': 'teacher' });
+  const post = (headers, path, body) => call(env, 'POST', path, { headers, body: { client_id: ids().client_id, ...body } });
+
+  await post(st, '/api/portal/student/messages', { teacher_code: school.anita, about: 'Help with a topic', message: 'Please explain refraction.' });
+  await post(t, '/api/portal/teacher/messages', { student_code: school.rahul, message: 'Yes, on Monday.' });
+  await post(st, '/api/portal/student/exams', { exam: 'Annual', starts_on: addDays(today, 30) });
+  await post(t, '/api/portal/teacher/leave-requests', { from: addDays(today, 3), reason: 'Sick' });
+  await call(env, 'POST', '/api/leave-requests/LRQ-0001', { headers: office, body: { action: 'approve' } });
+  await post(office, '/api/tasks', { title: 'Print posters' });
+  await post(office, '/api/tasks', { title: 'Call parents' });
+  await call(env, 'POST', '/api/tasks/TSK-0001', { headers: t, body: { stage: 'Doing' } });
+  await call(env, 'POST', '/api/tasks/TSK-0002', { headers: office, body: { position: 99 } }); // a drag in the same column
+  const wrong = await saveAs(env, school.office, 'fee', fee({ student_name: 'Priya Negi', class: 'Class 7', amount: '700' }), { person_code: school.priya });
+  await call(env, 'POST', `/api/entries/${wrong.data.entry.code}/cancel`, { headers: office, body: { token: wrong.cancel_token, reason: 'Wrong amount' } });
+  await deleteAs(env, office, school.vikram, 'Test teacher');
+
+  const all = (await call(env, 'GET', '/api/log', { headers: office })).data;
+  assert.equal(all.ok, true);
+  const times = all.items.map((i) => i.at);
+  assert.deepEqual(times, [...times].sort().reverse(), 'newest first');
+  const find = (fn) => all.items.find(fn);
+  assert.deepEqual(find((i) => i.entry && i.entry.type === 'portal_message' && i.entry.data.from !== 'Teacher').who, { role: 'student', name: 'Rahul Sharma', code: school.rahul });
+  assert.deepEqual(find((i) => i.entry && i.entry.type === 'portal_message' && i.entry.data.from === 'Teacher').who, { role: 'teacher', name: 'Anita Negi', code: school.anita });
+  assert.equal(find((i) => i.entry && i.entry.type === 'exam' && i.entry.data.added_by).who.role, 'student');
+  assert.deepEqual(all.items.filter((i) => i.source === 'leave').map((i) => `${i.action}:${i.who.role}`), ['approved:office', 'asked:teacher']);
+  assert.ok(!all.items.some((i) => i.entry && i.entry.type === 'leave'), 'the leave saved by approving is shown as the approval');
+  assert.deepEqual(all.items.filter((i) => i.source === 'task').map((i) => `${i.task.code}:${i.action}:${i.task.stage}:${i.who.name}`),
+    ['TSK-0001:changed:Doing:Anita Negi', 'TSK-0002:created:To do:Office', 'TSK-0001:created:To do:Office']);
+  const cancel = find((i) => i.source === 'cancel');
+  assert.deepEqual([cancel.entry.code, cancel.entry.cancel_reason, cancel.who.role], [wrong.data.entry.code, 'Wrong amount', 'office']);
+  const del = find((i) => i.source === 'audit' && i.action === 'delete');
+  assert.deepEqual([del.person.code, del.note, del.details.entries.length, del.person.status], [school.vikram, 'Test teacher', 1, 'Cancelled']);
+  assert.ok(!all.items.some((i) => i.source === 'cancel' && /^Deleted with/.test(i.entry.cancel_reason)), 'cancelled by the delete: shown once, as the delete');
+
+  // filters and search
+  const only = async (who) => (await call(env, 'GET', `/api/log?who=${who}`, { headers: office })).data.items;
+  assert.ok((await only('teacher')).every((i) => i.who.role === 'teacher'));
+  assert.equal((await only('teacher')).length, 3); // the reply, the leave request, the task moved
+  assert.ok((await only('student')).every((i) => i.who.role === 'student'));
+  assert.equal((await only('student')).length, 2);
+  assert.ok((await only('office')).every((i) => i.who.role === 'office'));
+  const priya = (await call(env, 'GET', '/api/log?q=priya', { headers: office })).data.items;
+  assert.ok(priya.length >= 3 && priya.every((i) => JSON.stringify(i).toLowerCase().includes('priya')));
+  assert.equal((await call(env, 'GET', '/api/log', { headers: st })).status, 401);
+  assert.equal((await call(env, 'GET', '/api/log', { headers: t })).status, 401);
+
+  // pages: many entries saved at (nearly) the same moment, read 40 at a time, nothing lost or repeated
+  for (let i = 0; i < 95; i += 1) await saveAs(env, school.office, 'note', { person_name: 'Priya Negi', note: `Note ${i}` }, { person_code: school.priya });
+  const keys = [];
+  let next = null;
+  let pages = 0;
+  do {
+    const qs = next ? `?before=${encodeURIComponent(next.before)}&skip=${next.skip.join(',')}` : '';
+    const pageData = (await call(env, 'GET', `/api/log${qs}`, { headers: office })).data;
+    keys.push(...pageData.items.map((i) => i.key));
+    next = pageData.next;
+    pages += 1;
+  } while (next && pages < 20);
+  assert.equal(new Set(keys).size, keys.length, 'no item twice');
+  const count = async (sql) => (await env.DB.prepare(sql).first()).n;
+  const expected = await count("SELECT COUNT(*) AS n FROM entries WHERE client_id NOT LIKE 'leave-request-%'")
+    + await count("SELECT COUNT(*) AS n FROM entries WHERE cancelled_at IS NOT NULL AND cancel_reason NOT LIKE 'Deleted with %'")
+    + await count('SELECT COUNT(*) AS n FROM audit_log')
+    + 3 // task changes worth showing (the drag is not)
+    + await count("SELECT COUNT(*) AS n FROM leave_request_history WHERE action IN ('asked', 'approved', 'withdrawn') OR (action = 'declined' AND snapshot NOT LIKE '%Deleted with%')");
+  assert.equal(keys.length, expected);
+  assert.equal(pages, Math.ceil(expected / 40), 'full pages of 40, then the rest');
+});
+
+test('the activity log keeps 30 days, filters by what changed and when, and says who only when it is known', async () => {
+  const env = loginsEnv();
+  const school = await portalSchool(env);
+  const office = as(school.office);
+  const year = today.slice(0, 4);
+  const st = as((await loginAs(env, 'student', `rahulsharma${year}`, '1234')).cookie);
+  await call(env, 'POST', '/api/portal/student/messages', { headers: st, body: { client_id: ids().client_id, teacher_code: school.anita, about: 'Complaint', message: 'Less marks' } });
+  const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  for (const [n, days] of [[901, 40], [902, 20], [903, 3]]) {
+    await env.DB.prepare(`INSERT INTO entries (type, seq, code, entry_date, name, data, client_id, created_at)
+      VALUES ('note', ?1, printf('NOTE-%04d', ?1), '2026-10-01', 'Old note', '{}', ?2, ?3)`).bind(n, `old-note-${n}-abcdef`, ago(days)).run();
+  }
+  // a task changed before version 3 does not say who changed it
+  await env.DB.prepare("INSERT INTO tasks (seq, code, title, client_id) VALUES (900, 'TSK-0900', 'Old task', 'old-task-client-0900')").run();
+  const page = (await call(env, 'GET', `/api/people/${school.priya}`, { headers: office })).data.person;
+  await call(env, 'POST', `/api/people/${school.priya}`, { headers: office, body: { updated_at: page.updated_at, changes: { class: 'Class 8' } } });
+  await deleteAs(env, office, school.vikram, 'Test teacher');
+
+  const get = async (qs = '') => (await call(env, 'GET', `/api/log${qs}`, { headers: office })).data;
+  const codes = (d) => d.items.filter((i) => i.entry).map((i) => i.entry.code);
+  const month = await get();
+  assert.equal(month.when, 'month');
+  assert.ok(codes(month).includes('NOTE-0902') && codes(month).includes('NOTE-0903'));
+  assert.ok(!codes(month).includes('NOTE-0901'), 'older than 30 days: no longer in the log');
+  assert.ok(!codes(await get('?when=year')).includes('NOTE-0901'), 'never more than 30 days');
+  const week = await get('?when=week');
+  assert.ok(codes(week).includes('NOTE-0903') && !codes(week).includes('NOTE-0902'));
+  const day = await get('?when=today');
+  assert.ok(!codes(day).includes('NOTE-0903') && codes(day).includes('ADM-0001'));
+  assert.ok(await env.DB.prepare("SELECT 1 FROM entries WHERE code = 'NOTE-0901'").first(), 'the record itself stays');
+
+  // what changed
+  const kinds = async (what) => (await get(`?what=${what}`)).items;
+  assert.ok((await kinds('entries')).every((i) => i.source === 'entry' && i.entry.type !== 'portal_message'));
+  assert.deepEqual((await kinds('messages')).map((i) => `${i.entry.type}:${i.who.name}`), ['portal_message:Rahul Sharma']);
+  assert.deepEqual((await kinds('details')).map((i) => `${i.action}:${i.person.code}`), [`edit:${school.priya}`]);
+  assert.deepEqual((await kinds('deleted')).map((i) => `${i.action}:${i.person.code}`), [`delete:${school.vikram}`]);
+  assert.equal((await kinds('cancelled')).length, 0, 'cancelled by the delete: shown once, as the delete');
+  const tasks = await kinds('tasks');
+  assert.deepEqual(tasks.map((i) => `${i.task.code}:${i.who}`), ['TSK-0900:null']);
+  assert.equal((await get('?what=tasks&who=office')).items.length, 0, 'not known: not counted as the office');
+  assert.equal((await get('?what=messages&who=office')).items.length, 0);
+  assert.equal((await get('?what=leave&who=student')).items.length, 0);
+});

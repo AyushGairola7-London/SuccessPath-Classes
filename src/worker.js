@@ -8,6 +8,9 @@
 //   GET  /api/people?kind=student   the Students (or Teachers) list
 //   GET  /api/people/<STU-0001>     one student or teacher with their full history
 //   POST /api/people/<STU-0001>     change their details (name, class, phone, fee plan and so on)
+//   POST /api/people/<STU-0001>/delete   delete a student or teacher added by mistake, with a note
+//   POST /api/people/<STU-0001>/restore  put a deleted student or teacher back, with their entries
+//   GET  /api/log                   the Activity log: everything saved by the office, teachers and students
 //   GET  /api/analytics             numbers for the Analytics page
 //   GET  /api/calendar?month=YYYY-MM teachers' leave and holidays in a month, for the leave calendar
 //   GET  /api/tasks                 the Tasks board, with the exams coming up
@@ -120,6 +123,20 @@ async function handleApi(request, env, url) {
   if (editing && method === 'POST') {
     const denied = await checkAdmin(request, env);
     return denied || editPerson(request, env, editing[1]);
+  }
+
+  const removing = /^\/api\/people\/((?:STU|TR)-\d{1,12})\/(delete|restore)$/.exec(path);
+  if (removing) {
+    if (method !== 'POST') return methodNotAllowed('POST');
+    const denied = await checkAdmin(request, env);
+    if (denied) return denied;
+    return removing[2] === 'delete' ? deletePerson(request, env, removing[1]) : restorePerson(request, env, removing[1]);
+  }
+
+  if (path === '/api/log') {
+    if (method !== 'GET') return methodNotAllowed('GET');
+    const denied = await checkAdmin(request, env);
+    return denied || activityLog(env, url);
   }
 
   if (path === '/api/people' || path.startsWith('/api/people/') || path === '/api/analytics' || path === '/api/calendar') {
@@ -718,21 +735,44 @@ FROM (SELECT * FROM entries
       ORDER BY COALESCE(entry_date, substr(created_at, 1, 10)) DESC, id DESC
       LIMIT 50)`;
 
+// What deleting this person would cancel, for the Delete panel: their active entries by form.
+const ACTIVE_COUNTS_SQL = `
+SELECT json_group_array(json_object('type', type, 'n', n, 'amount', amount)) AS counts
+FROM (SELECT type, COUNT(*) AS n, SUM(amount) AS amount FROM entries
+      WHERE person_id = ?1 AND status = 'Active' GROUP BY type ORDER BY n DESC, type)`;
+
+// The last delete or restore of a person: a delete means they are deleted now.
+const LAST_REMOVAL_SQL = `
+SELECT id, action, note, by_name, details, created_at FROM audit_log
+WHERE person_id = ?1 AND action IN ('delete', 'restore') ORDER BY id DESC LIMIT 1`;
+
 async function personDetail(env, code) {
   const person = await env.DB.prepare(`
     SELECT id, kind, code, name, class, phone, status, details, joined_on, left_on, created_from, created_at, updated_at
-    FROM people WHERE code = ?1 AND status <> 'Cancelled'`).bind(code).first();
+    FROM people WHERE code = ?1`).bind(code).first();
   if (!person) return json({ ok: false, error: `${code} was not found.` }, 404);
+  // Hidden people are not shown, except someone the office deleted: their page offers Restore.
+  let deleted = null;
+  if (person.status === 'Cancelled') {
+    const last = await env.DB.prepare(LAST_REMOVAL_SQL).bind(person.id).first();
+    if (!last || last.action !== 'delete') return json({ ok: false, error: `${code} was not found.` }, 404);
+    const d = parseDetails(last.details);
+    deleted = {
+      at: last.created_at, note: last.note, by: last.by_name,
+      entries: Array.isArray(d.entries) ? d.entries.length : 0,
+      requests: Array.isArray(d.requests) ? d.requests.length : 0,
+    };
+  }
   const { id, details, ...rest } = person;
   let parsed = {};
   try { parsed = JSON.parse(details || '{}'); } catch { /* keep empty */ }
   const school = typeof parsed.school === 'string' && parsed.school.trim() ? parsed.school.trim() : null;
-  const statements = [env.DB.prepare(PERSON_ENTRIES_SQL).bind(id)];
+  const statements = [env.DB.prepare(PERSON_ENTRIES_SQL).bind(id), env.DB.prepare(ACTIVE_COUNTS_SQL).bind(id)];
   statements.push(person.kind === 'student'
     ? env.DB.prepare(CLASS_EXAMS_SQL).bind(person.class, school)
     : env.DB.prepare(TEACHER_MESSAGES_SQL).bind(code, null));
   if (person.kind === 'teacher') statements.push(env.DB.prepare(LEAVE_REQUESTS_SQL).bind(1, id));
-  const [own, extra, requests] = await env.DB.batch(statements);
+  const [own, counts, extra, requests] = await env.DB.batch(statements);
   const first = (r) => (r && r.results && r.results[0]) || null;
   // How this person logs in to their portal (shown only in the office app).
   const rows = await portalUsernames(env, person.kind);
@@ -748,7 +788,9 @@ async function personDetail(env, code) {
     + `"entries":${(first(own) && first(own).entries) || '[]'},`
     + `"class_exams":${person.kind === 'student' ? (first(extra) && first(extra).entries) || '[]' : '[]'},`
     + `"messages_to":${person.kind === 'teacher' ? (first(extra) && first(extra).messages) || '[]' : '[]'},`
-    + `"leave_requests":${person.kind === 'teacher' ? (first(requests) && first(requests).requests) || '[]' : '[]'}}`;
+    + `"leave_requests":${person.kind === 'teacher' ? (first(requests) && first(requests).requests) || '[]' : '[]'},`
+    + `"counts":${(first(counts) && first(counts).counts) || '[]'},`
+    + `"deleted":${JSON.stringify(deleted)}}`;
   return new Response(body, { headers: JSON_HEADERS });
 }
 
@@ -1466,17 +1508,360 @@ async function editPerson(request, env, code) {
       return json({ ok: false, error: message, fields: { name: message } }, 422);
     }
   }
-  const updated = await env.DB.prepare(`
+  const changes = personChanges(kind, row, next, details);
+  const statements = [env.DB.prepare(`
     UPDATE people SET name = ?2, name_key = ?3, class = ?4, phone = ?5, joined_on = ?6, left_on = ?7, details = ?8,
       status = ?10, updated_at = ${NOW}
     WHERE code = ?1 AND updated_at = ?9
     RETURNING ${PERSON_FIELDS}`)
-    .bind(code, next.name, nameKey(next.name), next.class, next.phone, next.joined_on, next.left_on, JSON.stringify(details), row.updated_at, next.status)
-    .first();
+    .bind(code, next.name, nameKey(next.name), next.class, next.phone, next.joined_on, next.left_on, JSON.stringify(details), row.updated_at, next.status)];
+  // For the Activity log: only when the change above was saved (changes() counts its rows).
+  if (changes.length) {
+    statements.push(env.DB.prepare(`
+      INSERT INTO audit_log (action, person_id, details)
+      SELECT 'edit', id, ?2 FROM people WHERE code = ?1 AND changes() > 0`).bind(code, JSON.stringify({ changes })));
+  }
+  const [saved] = await env.DB.batch(statements);
+  const updated = saved && saved.results && saved.results[0];
   if (!updated) return json({ ok: false, error: CHANGED_MEANWHILE }, 409);
   let parsed = {};
   try { parsed = JSON.parse(updated.details || '{}'); } catch { /* keep empty */ }
   return json({ ok: true, person: { ...updated, details: parsed } });
+}
+
+// What Edit details changed, field by field, in words for the Activity log.
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function shownValue(field, value) {
+  if (value === null || value === undefined || value === '') return 'empty';
+  if (field.kind === 'money' && Number.isFinite(Number(value))) return `₹${Number(value).toLocaleString('en-IN')}`;
+  if (field.kind === 'date' && /^\d{4}-\d\d-\d\d$/.test(String(value))) {
+    const [y, m, d] = String(value).split('-').map(Number);
+    return `${d} ${MONTHS_SHORT[m - 1]} ${y}`;
+  }
+  return cut(value, 80);
+}
+
+function personChanges(kind, row, next, details) {
+  let before = {};
+  try { before = JSON.parse(row.details || '{}') || {}; } catch { before = {}; }
+  const out = [];
+  for (const field of PERSON_EDIT_FIELDS[kind]) {
+    let a = field.to ? row[field.to] : before[field.key];
+    let b = field.to ? next[field.to] : details[field.key];
+    if (field.values) {
+      const label = (v) => Object.keys(field.values).find((k) => field.values[k] === v) || v;
+      a = label(a);
+      b = label(b);
+    }
+    if (String(a ?? '') === String(b ?? '')) continue;
+    out.push({ label: field.label, from: shownValue(field, a), to: shownValue(field, b) });
+  }
+  return out;
+}
+
+/* ---------------- Deleting a student or teacher added by mistake ---------------- */
+
+// Nothing is removed from the database. The person is hidden (status Cancelled, like a mistyped name
+// whose only entry was cancelled), their entries are cancelled with the note, leave requests still
+// waiting are declined, and the audit_log row records what was changed, so Restore can put it back.
+const NOTE_MAX = 300;
+
+function deleteReason(code, note) {
+  return `Deleted with ${code}: ${note}`;
+}
+
+async function deletePerson(request, env, code) {
+  const body = await readJson(request);
+  if (!body.ok) return json({ ok: false, error: body.error }, 400);
+  const input = body.value || {};
+  if (!isClientId(input.client_id)) return json({ ok: false, error: 'Missing client_id.' }, 400);
+  const note = typeof input.note === 'string' ? input.note.replace(/\s+/g, ' ').trim() : '';
+  if (!note || note.length > NOTE_MAX) {
+    const message = note ? `Keep the note under ${NOTE_MAX} letters.` : 'Write what was wrong, for example "added twice" or "test entry".';
+    return json({ ok: false, error: message, fields: { note: message } }, 422);
+  }
+  if (await env.DB.prepare('SELECT 1 FROM audit_log WHERE client_id = ?1').bind(input.client_id).first()) {
+    return json({ ok: true, duplicate: true });
+  }
+  const person = await env.DB.prepare('SELECT id, kind, code, name, status FROM people WHERE code = ?1').bind(code).first();
+  if (!person) return json({ ok: false, error: `${code} was not found.` }, 404);
+  if (person.status === 'Cancelled') return json({ ok: false, error: `${person.name} was already deleted.` }, 409);
+  const reason = deleteReason(code, note);
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO audit_log (action, person_id, note, details, client_id)
+      SELECT 'delete', p.id, ?2, json_object(
+          'name', p.name, 'kind', p.kind, 'status', p.status,
+          'entries', json((SELECT json_group_array(code) FROM
+            (SELECT code FROM entries WHERE person_id = p.id AND status = 'Active' ORDER BY id))),
+          'requests', json((SELECT json_group_array(code) FROM
+            (SELECT code FROM leave_requests WHERE person_id = p.id AND status = 'Pending' ORDER BY id)))),
+        ?3
+      FROM people p WHERE p.id = ?1 AND p.status <> 'Cancelled'
+      ON CONFLICT (client_id) DO NOTHING`).bind(person.id, note, input.client_id),
+    env.DB.prepare(`
+      UPDATE entries SET status = 'Cancelled', cancel_reason = ?2, cancelled_at = ${NOW}, updated_at = ${NOW}
+      WHERE status = 'Active' AND code IN (SELECT value FROM json_each(
+        (SELECT json_extract(details, '$.entries') FROM audit_log WHERE client_id = ?1)))
+      RETURNING code`).bind(input.client_id, reason),
+    env.DB.prepare(`
+      UPDATE leave_requests
+      SET status = 'Declined', decided_by = 'Office', decided_at = ${NOW}, decision_note = ?2, updated_at = ${NOW}
+      WHERE status = 'Pending' AND code IN (SELECT value FROM json_each(
+        (SELECT json_extract(details, '$.requests') FROM audit_log WHERE client_id = ?1)))`).bind(input.client_id, reason),
+    env.DB.prepare(`
+      UPDATE people SET status = 'Cancelled', updated_at = ${NOW}
+      WHERE id = ?1 AND status <> 'Cancelled'
+        AND EXISTS (SELECT 1 FROM audit_log WHERE client_id = ?2 AND person_id = ?1)`).bind(person.id, input.client_id),
+  ]);
+  const cancelled = (results[1] && results[1].results) || [];
+  return json({ ok: true, person: { code: person.code, name: person.name, kind: person.kind }, entries: cancelled.length });
+}
+
+async function restorePerson(request, env, code) {
+  const body = await readJson(request);
+  if (!body.ok) return json({ ok: false, error: body.error }, 400);
+  const input = body.value || {};
+  if (!isClientId(input.client_id)) return json({ ok: false, error: 'Missing client_id.' }, 400);
+  if (await env.DB.prepare('SELECT 1 FROM audit_log WHERE client_id = ?1').bind(input.client_id).first()) {
+    return json({ ok: true, duplicate: true });
+  }
+  const person = await env.DB.prepare('SELECT id, kind, code, name, name_key, status FROM people WHERE code = ?1').bind(code).first();
+  if (!person) return json({ ok: false, error: `${code} was not found.` }, 404);
+  const last = await env.DB.prepare(LAST_REMOVAL_SQL).bind(person.id).first();
+  if (person.status !== 'Cancelled' || !last || last.action !== 'delete') {
+    return json({ ok: false, error: `${person.name} is not deleted.` }, 409);
+  }
+  const taken = await env.DB.prepare(`
+    SELECT code FROM people WHERE kind = ?1 AND name_key = ?2 AND status <> 'Cancelled' AND id <> ?3`)
+    .bind(person.kind, person.name_key, person.id).first();
+  if (taken) {
+    return json({ ok: false, error: `${taken.code} is called ${person.name} now. Change that name first, then restore.` }, 409);
+  }
+  const d = parseDetails(last.details);
+  const status = ['Active', 'Left', 'Enquiry', 'Demo'].includes(d.status) ? d.status : 'Active';
+  const entries = JSON.stringify(Array.isArray(d.entries) ? d.entries : []);
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO audit_log (action, person_id, details, client_id)
+      SELECT 'restore', ?1, json_object('of', ?2, 'status', ?3, 'entries', json(?4)), ?5
+      WHERE EXISTS (SELECT 1 FROM people WHERE id = ?1 AND status = 'Cancelled')
+      ON CONFLICT (client_id) DO NOTHING`).bind(person.id, last.id, status, entries, input.client_id),
+    env.DB.prepare(`
+      UPDATE people SET status = ?2, updated_at = ${NOW}
+      WHERE id = ?1 AND status = 'Cancelled' AND EXISTS (SELECT 1 FROM audit_log WHERE client_id = ?3)`)
+      .bind(person.id, status, input.client_id),
+    env.DB.prepare(`
+      UPDATE entries SET status = 'Active', cancel_reason = NULL, cancelled_at = NULL, updated_at = ${NOW}
+      WHERE status = 'Cancelled' AND cancel_reason LIKE ?2 AND code IN (SELECT value FROM json_each(?3))
+        AND EXISTS (SELECT 1 FROM audit_log WHERE client_id = ?1)
+      RETURNING code`).bind(input.client_id, `${deleteReason(code, '')}%`, entries),
+  ]);
+  const back = (results[2] && results[2].results) || [];
+  return json({ ok: true, person: { code: person.code, name: person.name, kind: person.kind, status }, entries: back.length });
+}
+
+/* ---------------- The Activity log ---------------- */
+
+// What changed in the last 30 days and who made it (when that is known), newest first, read from the
+// tables that already keep it: entries (saved and cancelled), audit_log (details changed, deleted,
+// restored), task_history and leave_request_history. Older changes drop off the page by themselves;
+// the records stay in the database. Each source is read newest first, and a page only goes as far
+// back as every source has been read; "before" and "skip" ask for the next page.
+//   ?who=office|teacher|student   ?what=entries|messages|cancelled|details|deleted|tasks|leave
+//   ?when=today|week|month (month: the last 30 days, the most the log keeps)   ?q=words
+const LOG_PAGE = 40;
+const LOG_DAYS = { week: 7, month: 30 };
+const LOG_WHAT = {
+  entries: ['e'], messages: ['e'], cancelled: ['c'], details: ['a'], deleted: ['a'], tasks: ['t'], leave: ['l'],
+};
+const FAR_FUTURE = '9999-12-31T23:59:59.999Z';
+const MESSAGE_FROM_TEACHER = "json_extract(e.data, '$.from') = 'Teacher'";
+const BY_STUDENT = `((e.type = 'portal_message' AND NOT COALESCE(${MESSAGE_FROM_TEACHER}, 0))
+  OR (e.type = 'exam' AND json_extract(e.data, '$.added_by') IS NOT NULL))`;
+
+function logSources(who, what) {
+  const wanted = (key) => what === 'all' || LOG_WHAT[what].includes(key);
+  const entryWhat = { entries: "e.type <> 'portal_message'", messages: "e.type = 'portal_message'" }[what] || '1';
+  const auditWhat = { details: "a.action = 'edit'", deleted: "a.action IN ('delete', 'restore')" }[what] || '1';
+  const entryWho = {
+    all: '1',
+    office: `NOT (e.type = 'portal_message' OR (e.type = 'exam' AND json_extract(e.data, '$.added_by') IS NOT NULL))`,
+    teacher: `e.type = 'portal_message' AND COALESCE(${MESSAGE_FROM_TEACHER}, 0)`,
+    student: BY_STUDENT,
+  }[who];
+  const list = [];
+  if (wanted('e')) {
+    list.push({
+      key: 'e',
+      sql: `SELECT e.id, e.type, e.code, e.status, e.entry_date, e.name, e.amount, json(e.data) AS data,
+          e.cancel_reason, e.created_at AS at, p.code AS person_code, p.name AS person_name, p.kind AS person_kind
+        FROM entries e LEFT JOIN people p ON p.id = e.person_id
+        WHERE e.created_at <= ?1 AND e.created_at >= ?4 AND e.client_id NOT LIKE 'leave-request-%'
+          AND ${entryWho} AND ${entryWhat}
+          AND (?3 IS NULL OR e.code LIKE ?3 OR e.name LIKE ?3 OR p.name LIKE ?3 OR e.data LIKE ?3)
+        ORDER BY e.created_at DESC LIMIT ?2`,
+    });
+  }
+  if ((who === 'all' || who === 'office') && wanted('c')) {
+    list.push({
+      key: 'c',
+      sql: `SELECT e.id, e.type, e.code, e.status, e.entry_date, e.name, e.amount, json(e.data) AS data,
+          e.cancel_reason, e.cancelled_at AS at, p.code AS person_code, p.name AS person_name, p.kind AS person_kind
+        FROM entries e LEFT JOIN people p ON p.id = e.person_id
+        WHERE e.cancelled_at IS NOT NULL AND e.cancelled_at <= ?1 AND e.cancelled_at >= ?4 AND e.status = 'Cancelled'
+          AND COALESCE(e.cancel_reason, '') NOT LIKE 'Deleted with %'
+          AND (?3 IS NULL OR e.code LIKE ?3 OR e.name LIKE ?3 OR p.name LIKE ?3 OR e.cancel_reason LIKE ?3)
+        ORDER BY e.cancelled_at DESC LIMIT ?2`,
+    });
+  }
+  if ((who === 'all' || who === 'office') && wanted('a')) {
+    list.push({
+      key: 'a',
+      sql: `SELECT a.id, a.action, a.by_name, a.note, a.details, a.created_at AS at,
+          p.code AS person_code, p.name AS person_name, p.kind AS person_kind, p.status AS person_status
+        FROM audit_log a JOIN people p ON p.id = a.person_id
+        WHERE a.created_at <= ?1 AND a.created_at >= ?4 AND ${auditWhat}
+          AND (?3 IS NULL OR p.name LIKE ?3 OR p.code LIKE ?3 OR a.note LIKE ?3 OR a.details LIKE ?3)
+        ORDER BY a.created_at DESC LIMIT ?2`,
+    });
+  }
+  if (who !== 'student' && wanted('t')) {
+    // Tasks changed before version 3 do not say who changed them: they are left out of "Office" and "Teachers".
+    const taskWho = { all: '1', office: "json_extract(h.snapshot, '$.changed_by') = 'Office'",
+      teacher: "json_extract(h.snapshot, '$.changed_by') <> 'Office'" }[who];
+    list.push({
+      key: 't',
+      sql: `SELECT h.id, h.action, h.snapshot, h.changed_at AS at,
+          (SELECT h2.snapshot FROM task_history h2 WHERE h2.task_id = h.task_id AND h2.id < h.id
+           ORDER BY h2.id DESC LIMIT 1) AS before
+        FROM task_history h
+        WHERE h.changed_at <= ?1 AND h.changed_at >= ?4 AND ${taskWho} AND (?3 IS NULL OR h.snapshot LIKE ?3)
+        ORDER BY h.changed_at DESC LIMIT ?2`,
+    });
+  }
+  if (who !== 'student' && wanted('l')) {
+    const leaveWho = { all: "h.action IN ('asked', 'withdrawn', 'approved', 'declined')",
+      office: "h.action IN ('approved', 'declined')", teacher: "h.action IN ('asked', 'withdrawn')" }[who];
+    list.push({
+      key: 'l',
+      sql: `SELECT h.id, h.action, h.snapshot, h.at, r.code, p.code AS person_code, p.name AS person_name
+        FROM leave_request_history h JOIN leave_requests r ON r.id = h.request_id JOIN people p ON p.id = r.person_id
+        WHERE h.at <= ?1 AND h.at >= ?4 AND ${leaveWho}
+          AND NOT (h.action = 'declined' AND COALESCE(json_extract(h.snapshot, '$.decision_note'), '') LIKE 'Deleted with %')
+          AND (?3 IS NULL OR p.name LIKE ?3 OR r.code LIKE ?3 OR h.snapshot LIKE ?3)
+        ORDER BY h.at DESC LIMIT ?2`,
+    });
+  }
+  return list;
+}
+
+const TASK_WORDS = ['title', 'notes', 'stage', 'start_on', 'due_on', 'budget', 'owner'];
+
+function logItem(source, row) {
+  const person = row.person_code ? { code: row.person_code, name: row.person_name, kind: row.person_kind } : null;
+  const base = { key: `${source}${row.id}`, at: row.at };
+  if (source === 'e' || source === 'c') {
+    const data = parseDetails(row.data);
+    const entry = {
+      code: row.code, type: row.type, status: row.status, entry_date: row.entry_date, name: row.name,
+      amount: row.amount, data, cancel_reason: row.cancel_reason,
+    };
+    let who = { role: 'office', name: 'Office' };
+    if (source === 'e' && row.type === 'portal_message') {
+      who = data.from === 'Teacher'
+        ? { role: 'teacher', name: data.teacher_name || 'A teacher', code: data.teacher_code || null }
+        : { role: 'student', name: data.student_name || (person && person.name) || 'A student', code: person && person.code };
+    } else if (source === 'e' && row.type === 'exam' && data.added_by) {
+      who = { role: 'student', name: data.student_name || (person && person.name) || 'A student', code: person && person.code };
+    }
+    return { ...base, source: source === 'e' ? 'entry' : 'cancel', who, entry, person };
+  }
+  if (source === 'a') {
+    return {
+      ...base, source: 'audit', who: { role: 'office', name: row.by_name || 'Office' }, action: row.action,
+      note: row.note, details: parseDetails(row.details), person: { ...person, status: row.person_status },
+    };
+  }
+  if (source === 't') {
+    const task = parseDetails(row.snapshot);
+    const before = row.before ? parseDetails(row.before) : null;
+    // Dragging a card up or down the same column changes nothing worth logging.
+    if (row.action !== 'created' && before && TASK_WORDS.every((k) => String(task[k] ?? '') === String(before[k] ?? ''))) return null;
+    const by = task.changed_by || null; // not known for changes saved before version 3
+    const pick = (t) => t && Object.fromEntries(['code', ...TASK_WORDS].map((k) => [k, t[k] ?? null]));
+    return {
+      ...base, source: 'task',
+      who: by === null ? null : by === 'Office' ? { role: 'office', name: 'Office' } : { role: 'teacher', name: by },
+      action: row.action === 'created' ? 'created' : 'changed', task: pick(task), before: row.action === 'created' ? null : pick(before),
+    };
+  }
+  const snap = parseDetails(row.snapshot);
+  const teacher = { role: 'teacher', name: row.person_name, code: row.person_code };
+  return {
+    ...base, source: 'leave', action: row.action,
+    who: row.action === 'asked' || row.action === 'withdrawn' ? teacher : { role: 'office', name: snap.decided_by || 'Office' },
+    request: {
+      code: row.code, from: snap.from, to: snap.to, reason: snap.reason, notes: snap.notes,
+      decision_note: snap.decision_note || null, leave_code: snap.leave_code || null,
+    },
+    person: { code: row.person_code, name: row.person_name, kind: 'teacher' },
+  };
+}
+
+async function activityLog(env, url) {
+  const pick = (name, allowed, otherwise) => (allowed.includes(url.searchParams.get(name)) ? url.searchParams.get(name) : otherwise);
+  const who = pick('who', ['office', 'teacher', 'student'], 'all');
+  const what = pick('what', Object.keys(LOG_WHAT), 'all');
+  const when = pick('when', ['today', 'week', 'month'], 'month');
+  const since = when === 'today'
+    ? new Date(`${indiaToday()}T00:00:00+05:30`).toISOString()
+    : new Date(Date.now() - LOG_DAYS[when] * 86400000).toISOString();
+  const q = (url.searchParams.get('q') || '').replace(/[%_]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const like = q ? `%${q}%` : null;
+  const cursor = url.searchParams.get('before') || '';
+  const before = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(cursor) ? cursor : FAR_FUTURE;
+  const skip = new Set((url.searchParams.get('skip') || '').split(',').filter((k) => /^[ecatl]\d{1,12}$/.test(k)).slice(0, 200));
+  const limit = LOG_PAGE + skip.size;
+  const sources = logSources(who, what);
+  const results = sources.length
+    ? await env.DB.batch(sources.map((src) => env.DB.prepare(src.sql).bind(before, limit, like, since)))
+    : [];
+
+  // Only as far back as every source was read: a source that filled its limit may have older rows.
+  let horizon = null;
+  const raw = [];
+  sources.forEach((src, i) => {
+    const rows = (results[i] && results[i].results) || [];
+    if (rows.length >= limit) {
+      const oldest = rows[rows.length - 1].at;
+      if (horizon === null || oldest > horizon) horizon = oldest;
+    }
+    for (const row of rows) raw.push({ source: src.key, row });
+  });
+  let items = [];
+  for (const { source, row } of raw) {
+    if (skip.has(`${source}${row.id}`)) continue;
+    if (horizon !== null && row.at < horizon) continue;
+    const item = logItem(source, row);
+    if (item) items.push(item);
+  }
+  items.sort((a, b) => (a.at === b.at ? (a.key < b.key ? 1 : -1) : (a.at < b.at ? 1 : -1)));
+  let next = null;
+  let handled = [];
+  if (items.length > LOG_PAGE) {
+    // The page is full: the next one starts at its last item, skipping what was shown at that time.
+    items = items.slice(0, LOG_PAGE);
+    next = items[items.length - 1].at;
+    handled = items.filter((it) => it.at === next).map((it) => it.key);
+  } else if (horizon !== null) {
+    // Every row read at the horizon was shown (or had nothing worth showing): skip them all.
+    next = horizon;
+    handled = raw.filter(({ row }) => row.at === next).map(({ source, row }) => `${source}${row.id}`);
+  }
+  const nextSkip = next ? [...new Set([...(next === before ? skip : []), ...handled])] : [];
+  return json({ ok: true, who, what, when, since, q, items, next: next ? { before: next, skip: nextSkip } : null });
 }
 
 /* ---------------- Leave calendar ---------------- */

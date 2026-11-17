@@ -3,8 +3,8 @@
 
 import { APP_NAME, PEOPLE, getForm, indiaToday, feeIsDue } from './forms.js';
 import {
-  app, ui, store, esc, icon, money, shortDate, timeOf, initials, getJson, topBar, tabBar, displayValue, toast,
-  refreshNotices, setTabBadge, whenSaved,
+  app, ui, store, esc, icon, money, shortDate, timeOf, initials, getJson, postJson, newId, topBar, tabBar, displayValue, toast,
+  refreshNotices, setTabBadge, whenSaved, openOverlay, closePanel,
 } from './lib.js';
 import { renderLeaveCalendar } from './calendar.js';
 import { requestsHtml, wireRequests } from './leave.js';
@@ -42,6 +42,12 @@ export function findPerson(code) {
     if (hit) return { ...hit, kind };
   }
   return null;
+}
+
+/** Takes a deleted person out of the saved list, so the list does not show them while it reloads. */
+function forgetPerson(kind, code) {
+  const saved = cachedPeople(kind);
+  if (saved) store.set(LIST_PREFIX + kind, { ...saved, people: saved.people.filter((p) => p.code !== code) });
 }
 
 /** Puts a person into the saved list straight after an entry about them is saved. */
@@ -268,11 +274,153 @@ export async function renderPersonDetail(kind, code) {
   document.title = `${person.name} | ${APP_NAME}`;
   app.querySelector('.bar-title').textContent = person.name;
   const main = app.querySelector('main');
+  if (data.deleted) {
+    // Deleted by the office: what happened, Restore, and their (cancelled) history underneath.
+    main.classList.add('is-deleted');
+    main.innerHTML = deletedHtml(kind, person, data.deleted)
+      + personHtml(kind, conf, person, data.entries, data.month, note, data.class_exams || []);
+    wireRestore(main, kind, person);
+    return;
+  }
+  main.classList.remove('is-deleted');
   main.innerHTML = personHtml(kind, conf, person, data.entries, data.month, note, data.class_exams || [])
     + (kind === 'teacher' ? requestsBlock(data.leave_requests || []) : '')
-    + portalHtml(kind, person, data.portal, data.entries, data.messages_to || []);
+    + portalHtml(kind, person, data.portal, data.entries, data.messages_to || [])
+    + deleteBlockHtml(kind, person);
   wirePortal(main, kind, person, data.portal);
   if (kind === 'teacher') wireRequests(main, refreshNotices);
+  wireDelete(main, kind, person, data);
+}
+
+/* ---------------- Deleting a student or teacher added by mistake ---------------- */
+
+function deleteBlockHtml(kind, person) {
+  return `
+    <section class="block danger-block" aria-labelledby="del-title">
+      <h3 class="block-title" id="del-title">Delete this ${kind}</h3>
+      <p class="block-sum">Only for a wrong entry: a test, a typing mistake, or someone added twice.
+        ${kind === 'student' ? 'For a student who stopped coming, use Mark as left instead.' : 'For a teacher who stopped teaching here, use Mark as left instead.'}</p>
+      <button type="button" class="btn btn-danger-quiet btn-delete" data-delete>${icon('trash')}<span>Delete ${esc(person.name)}</span></button>
+    </section>`;
+}
+
+// What deleting would also cancel, in words: "2 fees (₹3,000), 1 marks entry".
+function countsText(counts) {
+  return counts.map((c) => {
+    const form = getForm(c.type);
+    const title = form ? form.title : c.type;
+    return `${c.n} × ${title}${c.amount ? ` (${money(c.amount)})` : ''}`;
+  }).join(', ');
+}
+
+function wireDelete(main, kind, person, data) {
+  const button = main.querySelector('[data-delete]');
+  if (!button) return;
+  button.addEventListener('click', () => {
+    const counts = data.counts || [];
+    const total = counts.reduce((n, c) => n + c.n, 0);
+    const waiting = (data.leave_requests || []).filter((r) => r.status === 'Pending').length;
+    const overlay = openOverlay();
+    overlay.innerHTML = `
+      <div class="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+        <div class="panel-head">
+          <h2 class="panel-title" id="panel-title">Delete ${esc(person.name)}?</h2>
+          <button class="panel-close" type="button" data-action="close" aria-label="Close">${icon('close')}</button>
+        </div>
+        <p class="panel-text">${esc(person.name)} disappears from ${kind === 'student' ? 'Students' : 'Teachers'}, the Analytics page and the Google Sheet${person.status === 'Active' ? ', and can no longer log in to the portal' : ''}.</p>
+        <p class="panel-text">${total
+          ? `Their ${total === 1 ? 'entry is' : `${total} entries are`} cancelled too: ${esc(countsText(counts))}. If any of them was right, enter it again on the right ${kind}.`
+          : 'They have no entries.'}${waiting ? ` ${waiting === 1 ? 'Their leave request that is waiting is' : `Their ${waiting} leave requests that are waiting are`} declined.` : ''}</p>
+        <p class="panel-text">Nothing leaves the records, and Restore on this page puts it all back.</p>
+        <div class="field" data-field="note">
+          <label class="label" for="delete-note">What was wrong?</label>
+          <textarea id="delete-note" rows="2" maxlength="300" placeholder="For example: test entry, or added twice" aria-describedby="delete-err"></textarea>
+          <p class="field-error" id="delete-err" hidden></p>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-danger" type="button" data-action="confirm">${icon('trash')}<span>Delete ${esc(person.name)}</span></button>
+          <button class="btn btn-quiet" type="button" data-action="close">Keep ${esc(person.name)}</button>
+        </div>
+      </div>`;
+    const noteEl = overlay.querySelector('#delete-note');
+    const errorEl = overlay.querySelector('#delete-err');
+    const showError = (message) => {
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+      noteEl.setAttribute('aria-invalid', 'true');
+      noteEl.focus();
+    };
+    noteEl.addEventListener('input', () => { errorEl.hidden = true; noteEl.removeAttribute('aria-invalid'); });
+    for (const b of overlay.querySelectorAll('[data-action="close"]')) b.addEventListener('click', () => closePanel());
+    const clientId = newId();
+    overlay.querySelector('[data-action="confirm"]').addEventListener('click', async (e) => {
+      const confirm = e.currentTarget;
+      const note = noteEl.value.trim();
+      if (!note) { showError('Write what was wrong, for example "added twice" or "test entry".'); return; }
+      confirm.disabled = true;
+      const label = confirm.innerHTML;
+      confirm.textContent = 'Deleting…';
+      let res;
+      try {
+        res = await postJson(`/api/people/${encodeURIComponent(person.code)}/delete`, { client_id: clientId, note });
+      } catch (err) {
+        res = { status: 0, data: { error: 'No internet connection. Nothing was deleted. Try again when you are online.' } };
+      }
+      confirm.disabled = false;
+      confirm.innerHTML = label;
+      if (res.status === 200 && res.data && res.data.ok) {
+        closePanel(false);
+        forgetPerson(kind, person.code);
+        refreshPeople(kind).catch(() => { /* offline: the list catches up later */ });
+        location.hash = `#/${kind === 'student' ? 'students' : 'teachers'}`;
+        toast(`${person.name} deleted.`, { label: 'Undo', run: () => restore(kind, person, true) });
+        return;
+      }
+      if (res.status === 401) { closePanel(false); return; }
+      showError((res.data && ((res.data.fields && res.data.fields.note) || res.data.error)) || 'That did not work. Please try again.');
+    });
+    noteEl.focus();
+  });
+}
+
+function deletedHtml(kind, person, deleted) {
+  return `
+    <section class="deleted-banner" aria-labelledby="deleted-title">
+      <h2 class="deleted-title" id="deleted-title">${icon('trash')}<span>Deleted ${esc(whenSaved(deleted.at))}</span></h2>
+      <p>${esc(deleted.note ? `Note: ${deleted.note}` : '')}</p>
+      <p>${deleted.entries ? `${deleted.entries} ${deleted.entries === 1 ? 'entry was' : 'entries were'} cancelled with ${kind === 'student' ? 'this student' : 'this teacher'}` : 'There were no entries to cancel'}${deleted.requests ? `, and ${deleted.requests === 1 ? 'a leave request' : `${deleted.requests} leave requests`} declined` : ''}.
+        Restore brings ${esc(person.name)} back, with ${deleted.entries === 1 ? 'that entry' : 'those entries'}.</p>
+      <button type="button" class="btn btn-primary" data-restore>${icon('restore')}<span>Restore ${esc(person.name)}</span></button>
+    </section>`;
+}
+
+function wireRestore(main, kind, person) {
+  const button = main.querySelector('[data-restore]');
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    await restore(kind, person, false);
+    button.disabled = false;
+  });
+}
+
+async function restore(kind, person, fromUndo) {
+  let res;
+  try {
+    res = await postJson(`/api/people/${encodeURIComponent(person.code)}/restore`, { client_id: newId() });
+  } catch (err) {
+    toast('No internet connection. Nothing was changed. Try again when you are online.');
+    return;
+  }
+  if (res.status === 200 && res.data && res.data.ok) {
+    await refreshPeople(kind).catch(() => { /* offline: the list catches up later */ });
+    toast(`${person.name} is back${res.data.entries ? `, with ${res.data.entries} ${res.data.entries === 1 ? 'entry' : 'entries'}` : ''}.`);
+    const page = `#/${kind === 'student' ? 'students' : 'teachers'}/${person.code}`;
+    if (location.hash === page) renderPersonDetail(kind, person.code);
+    else if (!fromUndo) location.hash = page;
+    else if (ui.view === (kind === 'student' ? 'students' : 'teachers')) renderPeopleList(kind);
+    return;
+  }
+  if (res.status !== 401) toast((res.data && res.data.error) || 'That did not work. Please try again.');
 }
 
 // A teacher's leave requests from the portal: the waiting ones first, with Approve and Decline.
@@ -395,7 +543,8 @@ function personHtml(kind, conf, person, entries, month, note, classExams) {
       ['Qualification', d.qualification], ['Experience', d.experience], ['Salary asked for', d.salary_asked ? money(d.salary_asked) : ''],
       ['Joining date', shortDate(person.joined_on)], ['Left on', shortDate(person.left_on)],
       ['Added by entry', person.created_from]];
-  const statusBadge = person.status === 'Left' ? '<span class="badge badge--muted">Left</span>'
+  const statusBadge = person.status === 'Cancelled' ? '<span class="badge badge--deleted">Deleted</span>'
+    : person.status === 'Left' ? '<span class="badge badge--muted">Left</span>'
     : person.status === 'Enquiry' ? `<span class="badge badge--info">${kind === 'student' ? 'Enquiry' : 'Enquiry, not hired'}</span>`
       : person.status === 'Demo' ? '<span class="badge badge--demo">Demo classes</span>'
       : '<span class="badge badge--ok">Active</span>';

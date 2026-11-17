@@ -1,9 +1,47 @@
-# SuccessPath Classes: data entry app (version 3.1)
+# SuccessPath Classes: data entry app (version 3.2)
 
 A web page your dad opens on his phone or laptop to record enquiries, admissions, fees, marks,
 exam dates, complaints, teacher and other payments, and teachers joining or leaving, with a Tasks
 board for what to do next. Every entry goes into a database, is copied into a Google Sheet within
 5 minutes, and is backed up to Google Drive every night. It runs on free plans.
+
+## New in version 3.2: the Activity log, and deleting a student or teacher
+
+- **Activity log** (Home > *Activity log*, or the link at the bottom of the bell): what changed in
+  the last 30 days and who made it, newest first, one line per change:
+  - an entry saved, or cancelled (with the reason);
+  - a student's or teacher's details changed (each field, from and to);
+  - a student or teacher deleted (with the note) or restored;
+  - a task added, moved or changed;
+  - a leave request asked for, approved, declined or withdrawn;
+  - a portal message (to whom and what about, not the message itself).
+
+  Each line says who made the change: the office, or the teacher's or student's name. When that is
+  not known (tasks changed before version 3), nothing is shown. Filter by who (Office, Teachers,
+  Students), by what changed and by when (today, the last 7 days, the last 30 days), or search by a
+  name, ID or word. Changes older than 30 days drop off the log by themselves. The records
+  themselves stay in the database; the log is read from its history, and cannot be changed or
+  deleted.
+- **Delete a student or teacher** added by mistake (a test, a typing mistake, someone added twice):
+  **Delete** at the bottom of their page, with a note saying what was wrong (the note is needed).
+  - They disappear from the lists, the Analytics page, the Students or Teachers tab of the Google
+    Sheet, and their portal.
+  - Their entries are cancelled with the note ("Deleted with STU-0012: test entry"), and their leave
+    requests still waiting are declined.
+  - Nothing leaves the database. **Undo** straight after deleting, or **Restore** on their page
+    (open it from the Activity log), brings back the person, their status and their entries.
+  - For a student who stopped coming, or a teacher who left, use *Mark as left* as before.
+
+### Moving your live app to version 3.2
+
+In the successpath-app folder, in this order:
+```
+npm run db:setup
+npm run deploy
+```
+`db:setup` applies `migrations/0008_activity_log_and_delete.sql`: a table that records details
+changed, deletes and restores (it cannot be changed or deleted), and indexes that keep the log fast.
+There are no new secrets and nothing to change in Google Sheets.
 
 ## New in version 3.1: leave requests, notifications and two-way messages
 
@@ -618,6 +656,7 @@ public/                 the web page your dad uses
   tasks.js              Tasks board and the exams coming up
   calendar.js           leave and holiday calendar (Teachers page, and the teacher portal's Leave tab)
   leave.js              approving and declining leave requests in the office app
+  log.js                the Activity log (office app)
   edit.js               Edit details page for a student or teacher
   analytics.js          Analytics screen
   login.js              the login screen (office, teachers, students)
@@ -628,7 +667,7 @@ public/                 the web page your dad uses
 src/worker.js           the server: checks and saves entries, gives the sheet its feed
 migrations/             the database tables, delete protection, history, registers, Tasks board,
                         teacher enquiries, student demo classes, one record per name, portals,
-                        leave requests and read markers
+                        leave requests and read markers, the activity log
 google-sheet/Code.gs    the script you paste into the Google Sheet
 scripts/                helpers: make-key, backup, restore, check-forms
 test/                   tests, and the local test server behind `npm run try`
@@ -648,6 +687,7 @@ wrangler.jsonc          Cloudflare settings (put the database_id here)
 | The phone keeps saying "waiting" while online | Open `https://your-link/api/health` in a browser. It should say `"ok":true` |
 | A portal says it is not open yet | Set the office password: `npx wrangler secret put ADMIN_PASSWORD` (it works straight away) |
 | The bell, Messages or Leave tab says "The database is not up to date yet" | Run `npm run db:setup` (version 3.1 needs migration 0007) |
+| The Activity log, Delete or Edit details says "The database is not up to date yet" | Run `npm run db:setup` (version 3.2 needs migration 0008) |
 | A teacher or student cannot log in | Check the username on their page in the office app. Only current (Active) students and teachers can log in |
 | Papa forgot the office password | Set a new one with `npx wrangler secret put ADMIN_PASSWORD` |
 | Dad sees an old version | Close the app fully and open it again while online |

@@ -9,7 +9,7 @@
 import { APP_NAME, APP_VERSION, FORMS, GROUPS, PEOPLE, PICKER_KINDS, MONTHS, getForm, validateEntry, swapForMinus, localToday, nameKey } from './forms.js';
 import {
   app, ui, store, outbox, recent, esc, icon, newId, randomHex, whenSaved, longDate, displayValue, announce, toast,
-  postJson, statusInner, updateStatus, topBar, tabBar, DRAFT_PREFIX, openOverlay, closePanel, bellButton,
+  postJson, statusInner, updateStatus, topBar, tabBar, DRAFT_PREFIX, openOverlay, closePanel, bellButton, summaryText,
 } from './lib.js';
 import { cachedPeople, findPerson, rememberPerson, personHref } from './people.js';
 import { logOut } from './login.js';
@@ -54,6 +54,11 @@ export function renderHome(keepScroll) {
         ${items.length
           ? `<ul class="recent-list">${items.map(recentItemHtml).join('')}</ul>`
           : '<p class="empty">Nothing saved from this device yet. Entries you save will be listed here so you can check them.</p>'}
+        <a class="log-link" href="#/log">
+          <span class="log-link-icon" aria-hidden="true">${icon('log')}</span>
+          <span class="log-link-text"><strong>Activity log</strong><span>What changed in the last 30 days, and who made it</span></span>
+          ${icon('chevron')}
+        </a>
       </section>
       <footer class="foot">Version ${esc(APP_VERSION)}${ui.logins ? ' <span aria-hidden="true">·</span> <button type="button" class="linkish foot-logout" data-logout>Log out of this phone</button>' : ''}</footer>
     </main>
@@ -84,15 +89,6 @@ function tileHtml(form) {
       <span class="tile-icon">${icon(form.type)}</span>
       <span class="tile-label">${esc(form.title)}</span>
     </a>`;
-}
-
-function summaryText(form, data) {
-  return (form.summary || [])
-    .map((key) => {
-      const field = form.fields.find((f) => f.key === key);
-      return field ? displayValue(field, data[key]) : '';
-    })
-    .filter(Boolean);
 }
 
 function stateLabel(item) {

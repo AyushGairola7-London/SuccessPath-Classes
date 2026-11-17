@@ -2231,3 +2231,117 @@ main.with-tabs { padding-bottom: calc(108px + env(safe-area-inset-bottom)); }
 .cal-actions--one { grid-template-columns: 1fr; }
 .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin-right: 6px; }
 .cal-legend-item .cal-key { margin-left: 0; }
+
+/* ================================================================== */
+/* Version 3.2: the Activity log, and deleting a student or teacher    */
+/* ================================================================== */
+
+/* ---------- The link on Home and in the bell ---------- */
+
+.log-link {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--sheet);
+  border: 1.5px solid var(--rule-2);
+  border-radius: 14px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.log-link:hover { border-color: var(--register); }
+.log-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.log-link-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--register-wash);
+  color: var(--register);
+}
+.log-link-icon svg { width: 23px; height: 23px; }
+.log-link-text { display: grid; gap: 1px; min-width: 0; }
+.log-link-text span { color: var(--ink-2); font-size: 0.92rem; }
+.log-link > svg { width: 18px; height: 18px; color: var(--ink-3); }
+
+.notices-more {
+  display: block;
+  margin-top: 6px;
+  padding: 12px 2px 2px;
+  border-top: 1px solid var(--rule);
+  color: var(--register);
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .log-link-icon, :root:not([data-theme="light"]) .notices-more { color: #B3C4F7; }
+}
+:root[data-theme="dark"] .log-link-icon, :root[data-theme="dark"] .notices-more { color: #B3C4F7; }
+
+/* ---------- The Activity log ---------- */
+
+.log-intro { margin: 2px 2px 10px; color: var(--ink-2); font-size: 0.95rem; }
+.log-page .list-tools { display: grid; gap: 8px; }
+.log-list { list-style: none; margin: 0; padding: 0; }
+.log-day h2 {
+  margin: 18px 2px 6px;
+  color: var(--ink-2);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.log-day:first-child h2 { margin-top: 8px; }
+.log-row {
+  display: grid;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--sheet);
+  border: 1.5px solid var(--rule-2);
+  border-top-width: 0;
+}
+.log-day + .log-row { border-top-width: 1.5px; border-radius: 14px 14px 0 0; }
+.log-row:has(+ .log-day), .log-row:last-child { border-radius: 0 0 14px 14px; }
+.log-day + .log-row:has(+ .log-day), .log-day + .log-row:last-child { border-radius: 14px; }
+.log-time { color: var(--ink-3); font-size: 0.88rem; padding-top: 2px; white-space: nowrap; }
+.log-main { display: grid; gap: 2px; min-width: 0; }
+.log-what { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.log-what a, .log-who a { color: inherit; text-underline-offset: 3px; }
+.log-who { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ink-2); font-size: 0.9rem; overflow-wrap: anywhere; }
+.log-sub { margin: 2px 0 0; color: var(--ink-2); font-size: 0.94rem; overflow-wrap: anywhere; white-space: pre-line; }
+.log-sub .badge { margin-right: 4px; }
+.log-code { margin: 2px 0 0; color: var(--ink-3); font-size: 0.8rem; }
+.who-dot { flex-shrink: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--register); }
+.who-dot--teacher { background: var(--mine-ink); }
+.who-dot--student { background: var(--ok-ink); }
+.log-more { display: flex; justify-content: center; margin-top: 14px; }
+.log-selects { display: flex; flex-wrap: wrap; gap: 8px; }
+.log-selects .class-filter { flex: 1 1 8rem; min-width: 0; }
+.log-more .btn { min-width: 12rem; }
+
+/* ---------- Deleting, and a deleted student's or teacher's page ---------- */
+
+.danger-block { border-color: var(--rule-2); }
+.danger-block .block-sum { margin-bottom: 10px; }
+.btn-delete, .deleted-banner .btn, .panel-actions .btn-danger { gap: 8px; }
+.btn-delete svg, .deleted-banner .btn svg, .panel-actions .btn-danger svg { width: 20px; height: 20px; flex-shrink: 0; }
+.btn-delete { width: 100%; }
+
+.deleted-banner {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 14px 16px 16px;
+  background: var(--sheet);
+  border: 2px solid var(--bad);
+  border-radius: 14px;
+}
+.deleted-banner p { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.deleted-title { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--bad); font-size: 1.1rem; }
+.deleted-title svg { width: 22px; height: 22px; flex-shrink: 0; }
+.deleted-banner .btn { margin-top: 6px; }
+.badge--deleted { background: var(--bad); color: var(--sheet); }
+.is-deleted .quick-actions, .is-deleted .btn-edit, .is-deleted .call { display: none; }

@@ -25,7 +25,7 @@
 //     is saved as Money returned, ₹6,000).
 
 export const APP_NAME = 'SuccessPath Classes';
-export const APP_VERSION = '3.1.0';
+export const APP_VERSION = '3.2.0';
 
 // The order of the sections on the home screen.
 export const GROUPS = ['Students', 'Payments made', 'Teachers', 'Other'];
